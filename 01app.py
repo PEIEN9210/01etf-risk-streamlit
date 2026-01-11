@@ -13,16 +13,16 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
-import requests
 from datetime import datetime, timedelta
 import time
 
-st.set_page_config(page_title="ETF 熱門 + 個人化 Sharpe + θ 模型", layout="wide")
-st.title("📊 台灣熱門 ETF + 個人化 Sharpe + θ 模型推薦")
+st.set_page_config(page_title="ETF Sharpe + θ-model 個人化推薦", layout="wide")
+st.title("📊 台灣熱門 ETF + Sharpe + θ-model 個人化推薦")
 
 CACHE_TTL = 300
 TOP_N = 5
 TRADING_DAYS = 252
+MARKET_BENCHMARK = "0050.TW"  # 市場基準 ETF
 
 # -------------------------------
 # 1️⃣ 使用者輸入
@@ -85,10 +85,10 @@ def fetch_twse_avg_volume():
 twse_vol = fetch_twse_avg_volume()
 
 # -------------------------------
-# 5️⃣ 抓 Yahoo Finance ETF 資料
+# 5️⃣ 抓 Yahoo Finance ETF 資料 + Sharpe + Beta
 # -------------------------------
 @st.cache_data(ttl=CACHE_TTL)
-def fetch_etf_info(code):
+def fetch_etf_info(code, market_benchmark="0050.TW"):
     try:
         ticker = yf.Ticker(code)
         hist = ticker.history(period="1y", actions=True)
@@ -99,13 +99,21 @@ def fetch_etf_info(code):
         total_return = (price_now + total_div)/price_1y_ago -1
         daily_ret = hist["Close"].pct_change().dropna()
         sharpe = (daily_ret.mean()/daily_ret.std()*np.sqrt(TRADING_DAYS)) if daily_ret.std()>0 else 0
+
+        # Beta 計算
+        market_hist = yf.Ticker(market_benchmark).history(period="1y")
+        market_ret = market_hist["Close"].pct_change().dropna()
+        cov = np.cov(daily_ret, market_ret)[0,1]
+        beta = cov / np.var(market_ret) if np.var(market_ret)>0 else 1.0
+
         return {
             "代碼": code,
             "名稱": code,
             "型態": ETF_TYPE_MAPPING.get(code,"未知型態"),
             "即時價": round(price_now,2),
             "過去一年總報酬率 (%)": round(total_return*100,2),
-            "Sharpe Ratio": round(sharpe,2)
+            "Sharpe Ratio": round(sharpe,2),
+            "Beta": round(beta,2)
         }
     except Exception:
         return {
@@ -114,11 +122,12 @@ def fetch_etf_info(code):
             "型態": ETF_TYPE_MAPPING.get(code,"未知型態"),
             "即時價": 0.0,
             "過去一年總報酬率 (%)": 0.0,
-            "Sharpe Ratio": 0.0
+            "Sharpe Ratio": 0.0,
+            "Beta": 1.0
         }
 
 # -------------------------------
-# 6️⃣ 主按鈕：顯示熱門 ETF
+# 6️⃣ 熱門 ETF 按鈕
 # -------------------------------
 if st.button("📡 顯示即時熱門 ETF"):
     fallback_list = ["0050.TW","0056.TW","006208.TW","00713.TW","00878.TW",
@@ -132,7 +141,7 @@ if st.button("📡 顯示即時熱門 ETF"):
     st.dataframe(df_hot.head(TOP_N), use_container_width=True)
 
 # -------------------------------
-# 7️⃣ 主按鈕：個人化推薦
+# 7️⃣ 個人化推薦按鈕（Sharpe + Beta + θ-model）
 # -------------------------------
 if st.button("🚀 計算個人化推薦"):
     fallback_list = ["0050.TW","0056.TW","006208.TW","00713.TW","00878.TW",
@@ -141,19 +150,22 @@ if st.button("🚀 計算個人化推薦"):
     df_list = [fetch_etf_info(code) for code in etf_list]
     df = pd.DataFrame(df_list)
     df = df.merge(twse_vol, on="代碼", how="left").fillna({"成交均量":1e5})
-    # 個人化分數 = z_sharpe - β*abs(theta - ETF風險)
+
+    # 個人化分數 = Beta 校正 Sharpe - θ偏差
     sharpe_mean = df["Sharpe Ratio"].mean()
     sharpe_std = df["Sharpe Ratio"].std() if df["Sharpe Ratio"].std()>0 else 1
     df["sharpe_z"] = (df["Sharpe Ratio"] - sharpe_mean)/sharpe_std
     df["ETF_risk_norm"] = df["型態"].map(TYPE_RISK)
-    beta = 5.0
-    df["personal_score"] = df["sharpe_z"] - beta * abs(theta - df["ETF_risk_norm"])
+    beta_weight = 0.5
+    df["personal_score"] = df["sharpe_z"] * (1/df["Beta"]) - beta_weight * abs(theta - df["ETF_risk_norm"])
+
     def score_to_level(s):
         if s > 1.0: return "🔥很好"
         elif s > 0.5: return "🟡中等"
         else: return "🟢保守"
     df["風險等級"] = df["personal_score"].apply(score_to_level)
+
     st.subheader(f"📊 個人化排序結果（θ={theta:.2f}）")
     st.dataframe(df.sort_values("personal_score", ascending=False).head(TOP_N), use_container_width=True)
 
-st.info("📌 資料來源：TWSE 平均成交量 + Yahoo Finance｜Sharpe Ratio: Sharpe, 1966｜θ-model: Shefrin, 2000")
+st.info("📌 資料來源：TWSE 平均成交量 + Yahoo Finance｜Sharpe Ratio: Sharpe, 1966｜Beta 校正｜θ-model: Shefrin, 2000")
