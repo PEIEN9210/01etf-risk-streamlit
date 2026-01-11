@@ -16,9 +16,10 @@ import numpy as np
 import yfinance as yf
 import requests
 from datetime import datetime
+import time  # ✅ 新增，用於限速
 
 st.set_page_config(page_title="台灣 ETF 智慧排序", layout="wide")
-st.title("📊 台灣熱門 ETF + 個人化風險排序（工程穩定版）")
+st.title("📊 台灣熱門 ETF + 個人化風險排序（限速版）")
 
 CACHE_TTL = 600
 
@@ -71,7 +72,7 @@ def fetch_twse_etf_dividend():
         return pd.DataFrame(columns=["代號","名稱","分配收益","除息交易日"])
 
 # ===============================
-# 4️⃣ ETF 詳細資訊
+# 4️⃣ ETF 詳細資訊（核心）
 # ===============================
 @st.cache_data(ttl=CACHE_TTL)
 def fetch_etf_info(code, div_df):
@@ -136,7 +137,15 @@ def compute_etf_risk_index(row):
 # ===============================
 if st.button("📡 抓熱門 ETF 最新資訊"):
     div_df = fetch_twse_etf_dividend()
-    df = pd.DataFrame([fetch_etf_info(code, div_df) for code in fetch_hot_etf()])
+    etf_list = fetch_hot_etf()
+    results = []
+
+    for code in etf_list:
+        time.sleep(1.5)  # ✅ 每隻 ETF 間隔 1.5 秒，降低 Yahoo 被限流風險
+        info = fetch_etf_info(code, div_df)
+        results.append(info)
+
+    df = pd.DataFrame(results)
     df["風險指數"] = df.apply(compute_etf_risk_index, axis=1)
     st.dataframe(df, use_container_width=True)
 
