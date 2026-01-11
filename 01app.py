@@ -14,6 +14,8 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from datetime import datetime
+import warnings
+warnings.filterwarnings("ignore")
 
 st.set_page_config(page_title="台灣 ETF 個人化推薦", layout="wide")
 st.title("📊 台灣熱門 ETF + Sharpe Ratio + θ-model 個人化推薦")
@@ -21,7 +23,7 @@ st.title("📊 台灣熱門 ETF + Sharpe Ratio + θ-model 個人化推薦")
 CACHE_TTL = 300
 TOP_N = 5
 TRADING_DAYS = 252
-MARKET_BENCHMARK = "0050.TW"  # Beta 基準
+MARKET_BENCHMARK = "0050.TW"  # Beta 基準ETF
 
 # -------------------------------
 # 1️⃣ ETF 型態 mapping
@@ -55,10 +57,11 @@ def fetch_twse_avg_volume():
         avg_volume = df.groupby("證券代號")["成交股數"].mean()
         return avg_volume
     except Exception:
+        # fallback: 所有 ETF 成交量預設為 1
         return pd.Series([1]*len(ETF_TYPE_MAPPING), index=[k.replace(".TW","") for k in ETF_TYPE_MAPPING.keys()])
 
 # -------------------------------
-# 3️⃣ ETF 詳細資訊抓取
+# 3️⃣ ETF 詳細資料抓取
 # -------------------------------
 @st.cache_data(ttl=CACHE_TTL)
 def fetch_etf_info(code):
@@ -114,9 +117,6 @@ def compute_sharpe_beta(etf_hist, market_hist=None, risk_free_rate=0.01):
 # 5️⃣ θ-model 數據化
 # -------------------------------
 def calculate_theta(age,horizon,loss_tol,market_react,expected_return,expected_dividend):
-    """
-    將使用者輸入轉成 -1 ~ 3 範圍的數值化 θ
-    """
     react_map = {"立即賣出":-1,"持有觀望":0,"逢低加碼":1.2}
     theta = (
         -0.03*(age-40) +
@@ -126,23 +126,16 @@ def calculate_theta(age,horizon,loss_tol,market_react,expected_return,expected_d
         0.03*expected_return +
         0.02*expected_dividend
     )
-    # 將 θ 固定在 [-1,3] 範圍
-    theta = max(min(theta,3), -1)
+    theta = max(min(theta,3), -1)  # 固定範圍
     return round(theta,2)
 
 # -------------------------------
-# 6️⃣ 個人化 Sharpe+θ 結合排序
+# 6️⃣ 個人化分數
 # -------------------------------
-def personal_score(row, theta):
-    """
-    將 ETF Sharpe Ratio 與投資人 θ 結合成個人化分數
-    分數越高 → 越符合投資人風險偏好
-    """
-    sharpe = row["Sharpe Ratio"]
-    # 基本公式: θ-model 越接近 ETF 風險越好
+def personal_score(row, theta, sharpe_mean, sharpe_std, weight=2.0):
+    z_sharpe = (row["Sharpe Ratio"] - sharpe_mean)/sharpe_std if sharpe_std>0 else 0
     type_risk = {"債券型":0.2,"高股息型":0.5,"股票型":0.8}.get(row["型態"],0.6)
-    # 將 Sharpe Ratio 與風險匹配度結合
-    score = sharpe - abs(theta - type_risk)
+    score = z_sharpe - weight * abs(theta - type_risk)
     return score
 
 # -------------------------------
@@ -197,10 +190,12 @@ if st.button("🚀 計算個人化推薦"):
         st.warning("請先按『📡 抓熱門 ETF 最新資訊』")
     else:
         theta = calculate_theta(age,horizon,loss_tol,market_react,expected_return,expected_dividend)
-        df["個人化分數"] = df.apply(lambda row: personal_score(row, theta), axis=1)
+        sharpe_mean = df["Sharpe Ratio"].mean()
+        sharpe_std = df["Sharpe Ratio"].std()
+        df["個人化分數"] = df.apply(lambda row: personal_score(row, theta, sharpe_mean, sharpe_std), axis=1)
         df["風險等級"] = df["Sharpe Ratio"].apply(lambda s: "🔥很好" if s>1.0 else ("🟡中等" if s>0.5 else "🟢不佳"))
         df_sorted = df.sort_values("個人化分數", ascending=False)
-        st.subheader(f"📊 個人化推薦（θ-model 與 Sharpe Ratio 結合） θ值={theta}")
+        st.subheader(f"📊 個人化推薦（θ-model + Sharpe Ratio） θ值={theta}")
         st.dataframe(df_sorted.head(TOP_N), use_container_width=True)
 
 st.info("📌 資料來源：Yahoo Finance + TWSE｜僅供參考，投資需自負風險")
