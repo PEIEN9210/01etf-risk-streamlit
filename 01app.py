@@ -12,148 +12,113 @@ Original file is located at
 
 import streamlit as st
 import pandas as pd
-import numpy as np
-import yfinance as yf
 import requests
 from datetime import datetime
+import yfinance as yf
+import time
 
-st.set_page_config(page_title="台灣 ETF 智慧排序", layout="wide")
-st.title("📊 台灣熱門 ETF + 個人化風險排序（穩定版）")
-
-CACHE_TTL = 600
-
-# ===============================
-# 1️⃣ 熱門 ETF
-# ===============================
-def fetch_hot_etf():
-    return [
-        "0050.TW","0056.TW","006208.TW","00713.TW","00878.TW",
-        "00692.TW","00900.TW","00695B.TW","00794B.TW","00772B.TW"
-    ]
+st.set_page_config(page_title="台灣 ETF 熱門排行 + 智慧風險排序", layout="wide")
+st.title("📈 自動熱門 ETF 排名 + 風險指數比較")
 
 # ===============================
-# 2️⃣ ETF 型態
+# 1️⃣ 抓取 TWSE ETF 日成交資訊
 # ===============================
-ETF_TYPE_MAPPING = {
-    "0050.TW": "股票型",
-    "0056.TW": "高股息型",
-    "006208.TW": "股票型",
-    "00713.TW": "高股息型",
-    "00878.TW": "高股息型",
-    "00692.TW": "股票型",
-    "00900.TW": "高股息型",
-    "00695B.TW": "債券型",
-    "00794B.TW": "債券型",
-    "00772B.TW": "債券型",
-}
+@st.cache_data(ttl=600)
+def fetch_twse_etf_daily(date=None):
+    """
+    從 TWSE 下載 ETF 日成交資訊（HTML table）
+    date: '%Y%m%d' 例如 '20260112'
+    """
+    if date is None:
+        date = datetime.now().strftime("%Y%m%d")
 
-# ===============================
-# 3️⃣ TWSE ETF 分配收益
-# ===============================
-@st.cache_data(ttl=CACHE_TTL)
-def fetch_twse_etf_dividend():
-    url = "https://www.twse.com.tw/rwd/zh/ETF/etfDiv"
-    params = {"response": "json", "date": datetime.now().strftime("%Y%m%d")}
-
+    url = "https://www.twse.com.tw/exchangeReport/ETFDaily"
+    params = {"response": "json", "date": date}
     try:
         r = requests.get(url, params=params, timeout=10)
         r.raise_for_status()
         data = r.json().get("data", [])
-        if not data:
-            return pd.DataFrame(columns=["代號","名稱","分配收益","除息交易日"])
-        df = pd.DataFrame(data, columns=[
-            "代號","名稱","分配收益","除息交易日",
-            "收益分配發放日","收益分配所屬期間"
-        ])
-        df["分配收益"] = pd.to_numeric(df["分配收益"], errors="coerce")
-        return df.dropna(subset=["分配收益"])
-    except:
-        return pd.DataFrame(columns=["代號","名稱","分配收益","除息交易日"])
-
-# ===============================
-# 4️⃣ ETF 詳細資訊
-# ===============================
-@st.cache_data(ttl=CACHE_TTL)
-def fetch_etf_info(code, div_df):
-    etf_type = ETF_TYPE_MAPPING.get(code, "未知型態")
-    price_now = price_1y_ago = 0
-    annual_div = latest_div = 0
-    latest_date = "N/A"
-
-    try:
-        if etf_type != "債券型":
-            # 股票型 / 高股息型 ETF 抓 Yahoo Finance 歷史一年
-            ticker = yf.Ticker(code)
-            hist = ticker.history(period="1y")
-            if not hist.empty:
-                price_now = hist["Close"].iloc[-1]
-                price_1y_ago = hist["Close"].iloc[0]
-                dividends = hist.get("Dividends", pd.Series()).fillna(0)
-                annual_div = dividends.sum()
-                recent = dividends[dividends>0]
-                if not recent.empty:
-                    latest_div = recent.iloc[-1]
-                    latest_date = recent.index[-1].strftime("%Y-%m-%d")
-        else:
-            # 債券型 ETF 全部用 TWSE 資料
-            rows = div_df[div_df["代號"]==code.replace(".TW","")]
-            if not rows.empty:
-                latest = rows.iloc[0]
-                annual_div = rows["分配收益"].sum()
-                latest_div = latest["分配收益"]
-                latest_date = latest["除息交易日"]
-                # 取最近 5 日收盤價作為近似價格
-                ticker = yf.Ticker(code)
-                hist = ticker.history(period="5d")
-                if not hist.empty:
-                    price_now = hist["Close"].iloc[-1]
-                    price_1y_ago = price_now  # 避免除零，用近似值
-
+        cols = r.json().get("fields", [])
+        df = pd.DataFrame(data, columns=cols)
+        df["成交股數"] = pd.to_numeric(df["成交股數"], errors="coerce")
+        df["成交金額"] = pd.to_numeric(df["成交金額"], errors="coerce")
+        return df
     except Exception as e:
-        st.warning(f"ETF {code} 資料抓取失敗: {e}")
-
-    annual_yield = (annual_div / price_1y_ago * 100) if price_1y_ago else 0
-    total_return = ((price_now + annual_div) / price_1y_ago - 1) * 100 if price_1y_ago else 0
-
-    return {
-        "代碼": code,
-        "型態": etf_type,
-        "即時價": round(price_now,2),
-        "年化配息率 (%)": round(annual_yield,2),
-        "最新除息金額": round(latest_div,2),
-        "最新除息日": latest_date,
-        "過去一年總報酬率 (%)": round(total_return,2)
-    }
+        st.error(f"無法抓取 TWSE 成交資料: {e}")
+        return pd.DataFrame()
 
 # ===============================
-# 5️⃣ ETF 風險指數
+# 2️⃣ 抓取 ETF 詳細資訊（含配息 & 報酬）
+# ===============================
+@st.cache_data(ttl=600)
+def fetch_etf_details(code):
+    try:
+        ticker = yf.Ticker(code + ".TW")
+        hist = ticker.history(period="1y")
+        price_now = hist["Close"].iloc[-1] if not hist.empty else 0
+        price_1y_ago = hist["Close"].iloc[0] if not hist.empty else 0
+        dividends = hist.get("Dividends", pd.Series()).fillna(0)
+        annual_div = dividends.sum()
+        annual_yield = (annual_div / price_1y_ago * 100) if price_1y_ago else 0
+        total_return = ((price_now + annual_div) / price_1y_ago - 1) * 100 if price_1y_ago else 0
+
+        recent = dividends[dividends > 0]
+        latest_div = recent.iloc[-1] if not recent.empty else 0
+        latest_date = recent.index[-1].strftime("%Y-%m-%d") if not recent.empty else "N/A"
+
+        return {
+            "代碼": code,
+            "即時價": round(price_now, 2),
+            "年化配息率 (%)": round(annual_yield, 2),
+            "過去一年總報酬率 (%)": round(total_return, 2),
+            "最新除息金額": round(latest_div,2),
+            "最新除息日": latest_date
+        }
+    except Exception as e:
+        return {"代碼": code, "即時價":0,"年化配息率 (%)":0,"過去一年總報酬率 (%)":0,"最新除息金額":0,"最新除息日":"N/A"}
+
+# ===============================
+# 3️⃣ 計算風險指數
 # ===============================
 def compute_etf_risk_index(row):
-    type_risk = {"債券型":0.2,"高股息型":0.5,"股票型":0.8}.get(row["型態"],0.6)
+    # 簡單風險公式
     return round(
-        0.4 * type_risk
-        + 0.3 * (100 - row["過去一年總報酬率 (%)"]) * 0.01
-        + 0.3 * (100 - row["年化配息率 (%)"]) * 0.01,
+        0.4 * (100 - row["過去一年總報酬率 (%)"]) * 0.01 +
+        0.3 * (100 - row["年化配息率 (%)"]) * 0.01 +
+        0.3 * (row["成交量標準化"]),
         3
     )
 
 # ===============================
 # UI
 # ===============================
-if st.button("📡 抓熱門 ETF 最新資訊"):
-    div_df = fetch_twse_etf_dividend()
-    results = []
+if st.button("📡 更新熱門 ETF 排名"):
+    # 1) 抓成交資料
+    df_trade = fetch_twse_etf_daily()
 
-    for code in fetch_hot_etf():
-        # ✅ 股票型 ETF 限速，債券型 ETF 不抓歷史一年
-        if ETF_TYPE_MAPPING.get(code) != "債券型":
-            import time
-            time.sleep(1.5)
-        info = fetch_etf_info(code, div_df)
-        results.append(info)
+    if df_trade.empty:
+        st.warning("沒有取得成交資料！")
+    else:
+        # 2) 取出成交最高的前 10 支 ETF
+        df_sorted = df_trade.sort_values("成交股數", ascending=False).head(10)
+        df_sorted["代碼"] = df_sorted["證券代號"].astype(str)
 
-    df = pd.DataFrame(results)
-    df["風險指數"] = df.apply(compute_etf_risk_index, axis=1)
-    st.dataframe(df, use_container_width=True)
+        # 3) 加上 ETF 詳細資訊
+        details = []
+        max_vol = df_sorted["成交股數"].max()
+        for _, r in df_sorted.iterrows():
+            code = r["代碼"]
+            det = fetch_etf_details(code)
+            det["成交量"] = r["成交股數"]
+            det["成交值"] = r["成交金額"]
+            # 成交量標準化（0~1）
+            det["成交量標準化"] = det["成交量"] / max_vol if max_vol else 0
+            details.append(det)
+            time.sleep(1)  # 避免被 yfinance 限流
 
-st.info("📌 債券 ETF 資料來源：台灣證交所 TWSE｜其餘：Yahoo Finance")
+        df_result = pd.DataFrame(details)
+        # 4) 風險指數
+        df_result["風險指數"] = df_result.apply(compute_etf_risk_index, axis=1)
+        st.dataframe(df_result, use_container_width=True)
+
+st.info("熱門排名依 TWSE 成交量（成交股數排序）決定，再計算風險指數")
