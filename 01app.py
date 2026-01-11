@@ -15,38 +15,25 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import requests
-from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# ===============================
-# Streamlit 基本設定
-# ===============================
 st.set_page_config(page_title="台灣 ETF 智慧排序", layout="wide")
-st.title("📊 台灣熱門 ETF + 個人化風險排序 (永續更新)")
+st.title("📊 台灣熱門 ETF + 個人化風險排序（工程穩定版）")
 
-CACHE_TTL = 300
+CACHE_TTL = 600
 TOP_N = 5
-TRADING_DAYS = 252
 
 # ===============================
-# 1️⃣ 爬取熱門 ETF（Yahoo 奇摩 ETF 排行榜）
+# 1️⃣ 熱門 ETF（固定清單，避免 Yahoo 結構變動）
 # ===============================
-@st.cache_data(ttl=CACHE_TTL)
 def fetch_hot_etf():
-    try:
-        url = "https://tw.stock.yahoo.com/etf/market-movers"
-        tables = pd.read_html(url)
-        df = pd.concat(tables, ignore_index=True)
-        df["代碼"] = df["代碼"].astype(str) + ".TW"
-        return df["代碼"].tolist()
-    except Exception:
-        return [
-            "0050.TW","0056.TW","006208.TW","00713.TW","00878.TW",
-            "00692.TW","00900.TW","00695B.TW","00794B.TW","00772B.TW"
-        ]
+    return [
+        "0050.TW","0056.TW","006208.TW","00713.TW","00878.TW",
+        "00692.TW","00900.TW","00695B.TW","00794B.TW","00772B.TW"
+    ]
 
 # ===============================
-# 2️⃣ ETF 型態 mapping
+# 2️⃣ ETF 型態
 # ===============================
 ETF_TYPE_MAPPING = {
     "0050.TW": "股票型",
@@ -59,169 +46,105 @@ ETF_TYPE_MAPPING = {
     "00695B.TW": "債券型",
     "00794B.TW": "債券型",
     "00772B.TW": "債券型",
-    "00757.TW": "股票型",
 }
 
 # ===============================
-# 3️⃣ 債券 ETF 股息（Yahoo 奇摩股利頁）
+# 3️⃣ TWSE ETF 分配收益（官方）
 # ===============================
 @st.cache_data(ttl=CACHE_TTL)
-def fetch_bond_etf_dividend_yahoo_tw(code):
-    try:
-        stock_id = code.replace(".TW", "")
-        url = f"https://tw.stock.yahoo.com/quote/{stock_id}/dividend"
-        headers = {"User-Agent": "Mozilla/5.0"}
+def fetch_twse_etf_dividend():
+    url = "https://www.twse.com.tw/rwd/zh/ETF/etfDiv"
+    params = {
+        "response": "json",
+        "date": datetime.now().strftime("%Y%m%d")
+    }
 
-        r = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
+    r = requests.get(url, params=params, timeout=10)
+    data = r.json()["data"]
 
-        table = soup.find("table")
-        if table is None:
-            return 0.0, "N/A", 0.0
+    df = pd.DataFrame(data, columns=[
+        "代號","名稱","分配收益","除息交易日",
+        "收益分配發放日","收益分配所屬期間"
+    ])
 
-        df = pd.read_html(str(table))[0]
-        df.columns = ["股利所屬期間","現金股利","除息日","發放日"]
-        df["現金股利"] = pd.to_numeric(df["現金股利"], errors="coerce")
-        df = df.dropna(subset=["現金股利"])
-
-        if df.empty:
-            return 0.0, "N/A", 0.0
-
-        latest = df.iloc[0]
-        annual_div = df["現金股利"].sum()
-
-        return (
-            round(latest["現金股利"], 2),
-            latest["除息日"],
-            round(annual_div, 2)
-        )
-
-    except Exception:
-        return 0.0, "N/A", 0.0
+    df["分配收益"] = pd.to_numeric(df["分配收益"], errors="coerce")
+    return df.dropna(subset=["分配收益"])
 
 # ===============================
-# 4️⃣ 抓 ETF 詳細資訊（工程補強版）
+# 4️⃣ ETF 詳細資訊（核心）
 # ===============================
 @st.cache_data(ttl=CACHE_TTL)
-def fetch_etf_info(code):
+def fetch_etf_info(code, div_df):
+    etf_type = ETF_TYPE_MAPPING.get(code, "未知型態")
+    ticker = yf.Ticker(code)
+
     try:
-        ticker = yf.Ticker(code)
-        history = ticker.history(period="1y")
+        hist = ticker.history(period="1y")
+        price_now = hist["Close"].iloc[-1]
+        price_1y_ago = hist["Close"].iloc[0]
+    except:
+        price_now, price_1y_ago = 0, 0
 
-        if history.empty:
-            raise ValueError("No price data")
+    # ===== 債券 ETF：TWSE =====
+    if etf_type == "債券型":
+        etf_id = code.replace(".TW","")
+        rows = div_df[div_df["代號"] == etf_id]
 
-        price_now = history["Close"].iloc[-1]
-        price_1y_ago = history["Close"].iloc[0]
-        etf_type = ETF_TYPE_MAPPING.get(code, "未知型態")
-
-        # ===== 股息來源切換 =====
-        if etf_type == "債券型":
-            latest_div, latest_date, annual_div = fetch_bond_etf_dividend_yahoo_tw(code)
+        if not rows.empty:
+            latest = rows.iloc[0]
+            annual_div = rows["分配收益"].sum()
+            latest_div = latest["分配收益"]
+            latest_date = latest["除息交易日"]
         else:
-            dividends = history.get("Dividends", pd.Series()).fillna(0)
-            annual_div = dividends.sum()
-            recent_div = dividends[dividends > 0]
+            annual_div = latest_div = 0
+            latest_date = "N/A"
 
-            if not recent_div.empty:
-                latest_div = recent_div.iloc[-1]
-                latest_date = recent_div.index[-1].strftime("%Y-%m-%d")
-            else:
-                latest_div = 0.0
-                latest_date = "N/A"
+    # ===== 其他 ETF：Yahoo Finance =====
+    else:
+        dividends = hist.get("Dividends", pd.Series()).fillna(0)
+        annual_div = dividends.sum()
+        recent = dividends[dividends > 0]
 
-        annual_yield = (annual_div / price_1y_ago) * 100 if price_1y_ago > 0 else 0
-        total_return = ((price_now + annual_div) / price_1y_ago - 1) * 100
+        if not recent.empty:
+            latest_div = recent.iloc[-1]
+            latest_date = recent.index[-1].strftime("%Y-%m-%d")
+        else:
+            latest_div = 0
+            latest_date = "N/A"
 
-        return {
-            "代碼": code,
-            "名稱": code,
-            "型態": etf_type,
-            "即時價": round(price_now, 2),
-            "年化配息率 (%)": round(annual_yield, 2),
-            "最新除息金額": round(latest_div, 2),
-            "最新除息日": latest_date,
-            "過去一年總報酬率 (%)": round(total_return, 2)
-        }
+    annual_yield = (annual_div / price_1y_ago * 100) if price_1y_ago else 0
+    total_return = ((price_now + annual_div) / price_1y_ago - 1) * 100 if price_1y_ago else 0
 
-    except Exception:
-        return {
-            "代碼": code,
-            "名稱": code,
-            "型態": ETF_TYPE_MAPPING.get(code,"未知型態"),
-            "即時價": 0.0,
-            "年化配息率 (%)": 0.0,
-            "最新除息金額": 0.0,
-            "最新除息日": "N/A",
-            "過去一年總報酬率 (%)": 0.0
-        }
+    return {
+        "代碼": code,
+        "型態": etf_type,
+        "即時價": round(price_now,2),
+        "年化配息率 (%)": round(annual_yield,2),
+        "最新除息金額": round(latest_div,2),
+        "最新除息日": latest_date,
+        "過去一年總報酬率 (%)": round(total_return,2)
+    }
 
 # ===============================
-# 5️⃣ θ-model
-# ===============================
-def calculate_theta(age,horizon,loss_tol,market_react,expected_return,expected_dividend):
-    theta = (
-        -0.03*(age-40)
-        + 0.04*horizon
-        + 0.05*(loss_tol-15)
-        + {"立即賣出":-1,"持有觀望":0,"逢低加碼":1.2}[market_react]
-        + 0.03*expected_return
-        + 0.02*expected_dividend
-    )
-    return round(theta,2)
-
-# ===============================
-# 6️⃣ ETF 風險指數
+# 5️⃣ ETF 風險指數
 # ===============================
 def compute_etf_risk_index(row):
     type_risk = {"債券型":0.2,"高股息型":0.5,"股票型":0.8}.get(row["型態"],0.6)
-    score = (
+    return round(
         0.4 * type_risk
         + 0.3 * (100 - row["過去一年總報酬率 (%)"]) * 0.01
-        + 0.3 * (100 - row["年化配息率 (%)"]) * 0.01
+        + 0.3 * (100 - row["年化配息率 (%)"]) * 0.01,
+        3
     )
-    return round(score,3)
 
 # ===============================
-# 使用者輸入
-# ===============================
-cols = st.columns(6)
-age = cols[0].slider("👤 年齡",20,80,35)
-horizon = cols[1].slider("⏳ 投資年限",1,40,10)
-loss_tol = cols[2].slider("💥 最大可接受損失 (%)",0,50,15)
-expected_return = cols[3].slider("🎯 預期報酬 (%)",0,50,10)
-expected_dividend = cols[4].slider("💰 期望配息 (%)",0,50,3)
-market_react = cols[5].radio("📉 市場下跌 20%", ["立即賣出","持有觀望","逢低加碼"])
-
-# ===============================
-# 抓熱門 ETF
+# UI
 # ===============================
 if st.button("📡 抓熱門 ETF 最新資訊"):
-    etf_codes = fetch_hot_etf()
-    df = pd.DataFrame([fetch_etf_info(code) for code in etf_codes])
-    st.subheader("📈 最新熱門 ETF 資訊")
+    div_df = fetch_twse_etf_dividend()
+    df = pd.DataFrame([
+        fetch_etf_info(code, div_df) for code in fetch_hot_etf()
+    ])
     st.dataframe(df, use_container_width=True)
 
-# ===============================
-# 計算個人化推薦
-# ===============================
-if st.button("🚀 計算個人化推薦"):
-    etf_codes = fetch_hot_etf()
-    df = pd.DataFrame([fetch_etf_info(code) for code in etf_codes])
-    df["ETF風險指數"] = df.apply(compute_etf_risk_index, axis=1)
-
-    theta = calculate_theta(
-        age,horizon,loss_tol,market_react,
-        expected_return,expected_dividend
-    )
-
-    level = "🟢保守型" if theta < -0.5 else "🟡平衡型" if theta < 0.8 else "🔴積極型"
-    df["與投資人距離"] = (df["ETF風險指數"] - theta).abs()
-
-    st.subheader(f"📊 投資人 θ 值：{theta} | 風險等級：{level}")
-    st.dataframe(
-        df.sort_values("與投資人距離").head(TOP_N),
-        use_container_width=True
-    )
-
-st.info("📌 資料來源：Yahoo 奇摩｜Yahoo Finance｜僅供參考，投資需自負風險")
+st.info("📌 債券 ETF 資料來源：台灣證交所 TWSE｜其餘：Yahoo Finance")
