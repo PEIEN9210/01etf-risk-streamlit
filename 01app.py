@@ -17,7 +17,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="台灣 ETF 智慧排序", layout="wide")
-st.title("📊 台灣熱門 ETF + 個人化風險排序 (穩定版)")
+st.title("📊 台灣熱門 ETF + 個人化風險匹配 (數據化 θ-model)")
 
 CACHE_TTL = 300
 TOP_N = 5
@@ -25,7 +25,7 @@ TRADING_DAYS = 252
 LOOKBACK_DAYS = 5  # 計算平均成交量
 
 # -------------------------------
-# 1️⃣ 穩定抓熱門 ETF（TWSE 最近 1~5 日平均成交量，帶 fallback）
+# 1️⃣ 穩定抓熱門 ETF（TWSE 近 1~5 日平均成交量）
 # -------------------------------
 @st.cache_data(ttl=CACHE_TTL)
 def fetch_hot_etf(n=10):
@@ -36,7 +36,7 @@ def fetch_hot_etf(n=10):
     codes_volume = {}
     
     days_checked = 0
-    max_attempts = 10  # 最多嘗試 10 天避免卡住
+    max_attempts = 10
     day_offset = 0
 
     while days_checked < LOOKBACK_DAYS and day_offset < max_attempts:
@@ -48,7 +48,6 @@ def fetch_hot_etf(n=10):
             if not df_list:
                 continue
             df = df_list[0]
-            df = df[df["證券代號"].str.endswith("B") | df["證券代號"].str.startswith(tuple("0123456789"))]
             df["成交股數"] = pd.to_numeric(df["成交股數"].str.replace(",",""), errors="coerce")
             df = df.dropna(subset=["成交股數"])
             for idx, row in df.iterrows():
@@ -150,26 +149,26 @@ def fetch_etf_info(code):
         }
 
 # -------------------------------
-# 4️⃣ θ-model
-# -------------------------------
-def calculate_theta(age,horizon,loss_tol,market_react,expected_return,expected_dividend):
-    theta = (
-        -0.03*(age-40)
-        +0.04*horizon
-        +0.05*(loss_tol-15)
-        +{"立即賣出":-1,"持有觀望":0,"逢低加碼":1.2}[market_react]
-        +0.03*expected_return
-        +0.02*expected_dividend
-    )
-    return round(theta,2)
-
-# -------------------------------
-# 5️⃣ ETF 風險指數
+# 4️⃣ ETF 風險指數 normalize 0~1
 # -------------------------------
 def compute_etf_risk_index(row):
     type_risk = {"債券型":0.2,"高股息型":0.5,"股票型":0.8}.get(row["型態"],0.6)
     score = 0.4*type_risk + 0.3*(100-row["過去一年總報酬率 (%)"])*0.01 + 0.3*(100-row["年化配息率 (%)"])*0.01
-    return round(score,3)
+    # normalize 0~1
+    return min(max(score,0),1)
+
+# -------------------------------
+# 5️⃣ 投資人 θ-model (數據化 0~1)
+# -------------------------------
+def calculate_theta(age,horizon,loss_tol,market_react,expected_return,expected_dividend):
+    age_score = 1 - (age-20)/(80-20)               # 年齡越大越保守
+    horizon_score = horizon/40                      # 投資年限越長越激進
+    loss_score = loss_tol/50                        # 容忍損失越高越激進
+    react_score = {"立即賣出":0,"持有觀望":0.5,"逢低加碼":1}[market_react]
+    ret_score = expected_return/50
+    div_score = expected_dividend/50
+    theta = 0.3*age_score + 0.2*horizon_score + 0.2*loss_score + 0.15*react_score + 0.1*ret_score + 0.05*div_score
+    return round(min(max(theta,0),1),2)  # 0~1
 
 # -------------------------------
 # 使用者輸入
@@ -203,12 +202,14 @@ if st.button("🚀 計算個人化推薦"):
         df = pd.DataFrame(df_list)
         df["ETF風險指數"] = df.apply(compute_etf_risk_index,axis=1)
         theta = calculate_theta(age,horizon,loss_tol,market_react,expected_return,expected_dividend)
-        if theta < -0.5:
-            level = "🟢保守型"
-        elif theta <0.8:
-            level = "🟡平衡型"
+
+        if theta < 0.33:
+            level = "🟢 保守型"
+        elif theta <0.66:
+            level = "🟡 平衡型"
         else:
-            level = "🔴積極型"
+            level = "🔴 積極型"
+
         df["與投資人距離"] = (df["ETF風險指數"]-theta).abs()
         st.subheader(f"📊 投資人 θ 值：{theta}  | 風險等級：{level}")
         st.dataframe(df.sort_values("與投資人距離").head(TOP_N), use_container_width=True)
