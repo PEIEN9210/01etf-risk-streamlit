@@ -127,7 +127,13 @@ expected_dividend = cols[4].slider("💰 期望配息 (%)",0,50,3)
 market_react = cols[5].radio("📉 市場下跌 20%", ["立即賣出","持有觀望","逢低加碼"])
 
 # -------------------------------
-# 5️⃣ 抓熱門 ETF
+# 初始化 session_state
+# -------------------------------
+if "df_etf" not in st.session_state:
+    st.session_state.df_etf = pd.DataFrame()
+
+# -------------------------------
+# 抓熱門 ETF
 # -------------------------------
 if st.button("📡 抓熱門 ETF 最新資訊"):
     avg_vol = fetch_twse_avg_volume()
@@ -150,23 +156,26 @@ if st.button("📡 抓熱門 ETF 最新資訊"):
     df = pd.DataFrame(df_list)
     # 先依平均成交量排序，再依 Sharpe Ratio 排序
     df = df.sort_values(["平均成交量","Sharpe Ratio"], ascending=False)
+    st.session_state.df_etf = df  # 存到 session_state
     st.subheader("📈 最新熱門 ETF 資訊（平均成交量 + Sharpe Ratio 排序）")
     st.dataframe(df, use_container_width=True)
 
 # -------------------------------
-# 6️⃣ 風險級別顯示
+# 計算個人化推薦
 # -------------------------------
-def sharpe_to_level(sharpe):
-    if sharpe > 1.0:
-        return "🔥很好"
-    elif sharpe >0.5:
-        return "🟡中等"
-    else:
-        return "🟢不佳"
-
 if st.button("🚀 計算個人化推薦"):
-    df["風險等級"] = df["Sharpe Ratio"].apply(sharpe_to_level)
-    st.subheader("📊 ETF 個人化推薦")
-    st.dataframe(df.head(TOP_N), use_container_width=True)
+    df = st.session_state.df_etf
+    if df.empty:
+        st.warning("請先按『📡 抓熱門 ETF 最新資訊』")
+    else:
+        def sharpe_to_level(sharpe):
+            if sharpe > 1.0:
+                return "🔥很好"
+            elif sharpe >0.5:
+                return "🟡中等"
+            else:
+                return "🟢不佳"
 
-st.info("📌 資料來源：Yahoo Finance + TWSE｜僅供參考，投資需自負風險")
+        df["風險等級"] = df["Sharpe Ratio"].apply(sharpe_to_level)
+        st.subheader("📊 ETF 個人化推薦")
+        st.dataframe(df.head(TOP_N), use_container_width=True)
