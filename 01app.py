@@ -16,15 +16,14 @@ import numpy as np
 import yfinance as yf
 import requests
 from datetime import datetime
-import time  # ✅ 新增，用於限速
 
 st.set_page_config(page_title="台灣 ETF 智慧排序", layout="wide")
-st.title("📊 台灣熱門 ETF + 個人化風險排序（限速版）")
+st.title("📊 台灣熱門 ETF + 個人化風險排序（穩定版）")
 
 CACHE_TTL = 600
 
 # ===============================
-# 1️⃣ 熱門 ETF（固定清單）
+# 1️⃣ 熱門 ETF
 # ===============================
 def fetch_hot_etf():
     return [
@@ -72,7 +71,7 @@ def fetch_twse_etf_dividend():
         return pd.DataFrame(columns=["代號","名稱","分配收益","除息交易日"])
 
 # ===============================
-# 4️⃣ ETF 詳細資訊（核心）
+# 4️⃣ ETF 詳細資訊
 # ===============================
 @st.cache_data(ttl=CACHE_TTL)
 def fetch_etf_info(code, div_df):
@@ -82,27 +81,33 @@ def fetch_etf_info(code, div_df):
     latest_date = "N/A"
 
     try:
-        ticker = yf.Ticker(code)
-        hist = ticker.history(period="1y")
-        if not hist.empty:
-            price_now = hist["Close"].iloc[-1]
-            price_1y_ago = hist["Close"].iloc[0]
-
-        if etf_type == "債券型":
-            etf_id = code.replace(".TW","")
-            rows = div_df[div_df["代號"]==etf_id]
+        if etf_type != "債券型":
+            # 股票型 / 高股息型 ETF 抓 Yahoo Finance 歷史一年
+            ticker = yf.Ticker(code)
+            hist = ticker.history(period="1y")
+            if not hist.empty:
+                price_now = hist["Close"].iloc[-1]
+                price_1y_ago = hist["Close"].iloc[0]
+                dividends = hist.get("Dividends", pd.Series()).fillna(0)
+                annual_div = dividends.sum()
+                recent = dividends[dividends>0]
+                if not recent.empty:
+                    latest_div = recent.iloc[-1]
+                    latest_date = recent.index[-1].strftime("%Y-%m-%d")
+        else:
+            # 債券型 ETF 全部用 TWSE 資料
+            rows = div_df[div_df["代號"]==code.replace(".TW","")]
             if not rows.empty:
                 latest = rows.iloc[0]
                 annual_div = rows["分配收益"].sum()
                 latest_div = latest["分配收益"]
                 latest_date = latest["除息交易日"]
-        else:
-            dividends = hist.get("Dividends", pd.Series()).fillna(0)
-            annual_div = dividends.sum()
-            recent = dividends[dividends>0]
-            if not recent.empty:
-                latest_div = recent.iloc[-1]
-                latest_date = recent.index[-1].strftime("%Y-%m-%d")
+                # 取最近 5 日收盤價作為近似價格
+                ticker = yf.Ticker(code)
+                hist = ticker.history(period="5d")
+                if not hist.empty:
+                    price_now = hist["Close"].iloc[-1]
+                    price_1y_ago = price_now  # 避免除零，用近似值
 
     except Exception as e:
         st.warning(f"ETF {code} 資料抓取失敗: {e}")
@@ -137,11 +142,13 @@ def compute_etf_risk_index(row):
 # ===============================
 if st.button("📡 抓熱門 ETF 最新資訊"):
     div_df = fetch_twse_etf_dividend()
-    etf_list = fetch_hot_etf()
     results = []
 
-    for code in etf_list:
-        time.sleep(1.5)  # ✅ 每隻 ETF 間隔 1.5 秒，降低 Yahoo 被限流風險
+    for code in fetch_hot_etf():
+        # ✅ 股票型 ETF 限速，債券型 ETF 不抓歷史一年
+        if ETF_TYPE_MAPPING.get(code) != "債券型":
+            import time
+            time.sleep(1.5)
         info = fetch_etf_info(code, div_df)
         results.append(info)
 
