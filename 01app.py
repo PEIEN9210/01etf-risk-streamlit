@@ -13,15 +13,15 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime
 
-st.set_page_config(page_title="台灣 ETF Sharpe 排序 + 個人化風險", layout="wide")
-st.title("📊 台灣熱門 ETF + Sharpe Ratio 風險排序")
+st.set_page_config(page_title="台灣 ETF 個人化推薦", layout="wide")
+st.title("📊 台灣熱門 ETF + Sharpe Ratio + θ-model 個人化推薦")
 
 CACHE_TTL = 300
 TOP_N = 5
 TRADING_DAYS = 252
-MARKET_BENCHMARK = "0050.TW"  # Beta 計算基準
+MARKET_BENCHMARK = "0050.TW"  # Beta 基準
 
 # -------------------------------
 # 1️⃣ ETF 型態 mapping
@@ -41,7 +41,7 @@ ETF_TYPE_MAPPING = {
 }
 
 # -------------------------------
-# 2️⃣ 抓 TWSE ETF 最近 1–5 日平均成交量
+# 2️⃣ TWSE 最近成交量平均
 # -------------------------------
 @st.cache_data(ttl=CACHE_TTL)
 def fetch_twse_avg_volume():
@@ -50,21 +50,15 @@ def fetch_twse_avg_volume():
         tables = pd.read_html(url)
         df = pd.concat(tables, ignore_index=True)
         df = df.rename(columns=lambda x: x.strip())
-        # 篩選 ETF
         df = df[df["證券名稱"].str.contains("ETF")]
         df["成交股數"] = df["成交股數"].replace("-", 0).astype(float)
-        # 取近 5 日平均（若資料不夠就取當日）
         avg_volume = df.groupby("證券代號")["成交股數"].mean()
         return avg_volume
     except Exception:
-        # fallback: 固定列表
-        return pd.Series(
-            [1]*len(ETF_TYPE_MAPPING),
-            index=[k.replace(".TW","") for k in ETF_TYPE_MAPPING.keys()]
-        )
+        return pd.Series([1]*len(ETF_TYPE_MAPPING), index=[k.replace(".TW","") for k in ETF_TYPE_MAPPING.keys()])
 
 # -------------------------------
-# 3️⃣ 抓 ETF 詳細資訊（Yahoo Finance）
+# 3️⃣ ETF 詳細資訊抓取
 # -------------------------------
 @st.cache_data(ttl=CACHE_TTL)
 def fetch_etf_info(code):
@@ -77,12 +71,10 @@ def fetch_etf_info(code):
         price_now = hist["Close"].iloc[-1]
         price_1y_ago = hist["Close"].iloc[0]
 
-        # 配息
         dividends = hist.get("Dividends", pd.Series()).fillna(0)
         total_div = dividends.sum()
         annual_div = total_div * (TRADING_DAYS / len(hist)) if len(hist)>0 else 0
 
-        # 年化總報酬
         total_return = (price_now + total_div)/price_1y_ago -1
 
         return {
@@ -93,13 +85,13 @@ def fetch_etf_info(code):
             "最新除息金額": round(dividends.iloc[-1] if not dividends.empty else 0,2),
             "最新除息日": dividends.index[-1].strftime("%Y-%m-%d") if not dividends.empty else "N/A",
             "過去一年總報酬率 (%)": round(total_return*100,2),
-            "hist": hist  # 用於後續 Sharpe/Beta 計算
+            "hist": hist
         }
     except Exception:
         return None
 
 # -------------------------------
-# 4️⃣ 計算 Sharpe Ratio 與 Beta
+# 4️⃣ 計算 Sharpe Ratio + Beta
 # -------------------------------
 def compute_sharpe_beta(etf_hist, market_hist=None, risk_free_rate=0.01):
     returns = etf_hist["Close"].pct_change().dropna()
@@ -110,13 +102,51 @@ def compute_sharpe_beta(etf_hist, market_hist=None, risk_free_rate=0.01):
     beta = None
     if market_hist is not None:
         market_returns = market_hist["Close"].pct_change().dropna()
-        if len(market_returns) == len(returns):
-            cov = np.cov(returns, market_returns)[0][1]
-            beta = cov / market_returns.var() if market_returns.var() >0 else None
+        min_len = min(len(returns), len(market_returns))
+        returns = returns[-min_len:]
+        market_returns = market_returns[-min_len:]
+        cov = np.cov(returns, market_returns)[0][1]
+        beta = cov / market_returns.var() if market_returns.var()>0 else None
+
     return sharpe, beta
 
 # -------------------------------
-# 使用者輸入
+# 5️⃣ θ-model 數據化
+# -------------------------------
+def calculate_theta(age,horizon,loss_tol,market_react,expected_return,expected_dividend):
+    """
+    將使用者輸入轉成 -1 ~ 3 範圍的數值化 θ
+    """
+    react_map = {"立即賣出":-1,"持有觀望":0,"逢低加碼":1.2}
+    theta = (
+        -0.03*(age-40) +
+        0.04*horizon +
+        0.05*(loss_tol-15) +
+        react_map.get(market_react,0) +
+        0.03*expected_return +
+        0.02*expected_dividend
+    )
+    # 將 θ 固定在 [-1,3] 範圍
+    theta = max(min(theta,3), -1)
+    return round(theta,2)
+
+# -------------------------------
+# 6️⃣ 個人化 Sharpe+θ 結合排序
+# -------------------------------
+def personal_score(row, theta):
+    """
+    將 ETF Sharpe Ratio 與投資人 θ 結合成個人化分數
+    分數越高 → 越符合投資人風險偏好
+    """
+    sharpe = row["Sharpe Ratio"]
+    # 基本公式: θ-model 越接近 ETF 風險越好
+    type_risk = {"債券型":0.2,"高股息型":0.5,"股票型":0.8}.get(row["型態"],0.6)
+    # 將 Sharpe Ratio 與風險匹配度結合
+    score = sharpe - abs(theta - type_risk)
+    return score
+
+# -------------------------------
+# 7️⃣ 使用者輸入
 # -------------------------------
 cols = st.columns(6)
 age = cols[0].slider("👤 年齡",20,80,35)
@@ -127,13 +157,13 @@ expected_dividend = cols[4].slider("💰 期望配息 (%)",0,50,3)
 market_react = cols[5].radio("📉 市場下跌 20%", ["立即賣出","持有觀望","逢低加碼"])
 
 # -------------------------------
-# 初始化 session_state
+# 8️⃣ 初始化 session_state
 # -------------------------------
 if "df_etf" not in st.session_state:
     st.session_state.df_etf = pd.DataFrame()
 
 # -------------------------------
-# 抓熱門 ETF
+# 9️⃣ 抓熱門 ETF
 # -------------------------------
 if st.button("📡 抓熱門 ETF 最新資訊"):
     avg_vol = fetch_twse_avg_volume()
@@ -148,34 +178,29 @@ if st.button("📡 抓熱門 ETF 最新資訊"):
         sharpe, beta = compute_sharpe_beta(info["hist"], market_hist)
         info["Sharpe Ratio"] = round(sharpe,2)
         info["Beta"] = round(beta,2) if beta is not None else "N/A"
-        # 加入成交量
         etf_id = code.replace(".TW","")
         info["平均成交量"] = avg_vol.get(etf_id, 0)
         df_list.append(info)
 
     df = pd.DataFrame(df_list)
-    # 先依平均成交量排序，再依 Sharpe Ratio 排序
     df = df.sort_values(["平均成交量","Sharpe Ratio"], ascending=False)
-    st.session_state.df_etf = df  # 存到 session_state
+    st.session_state.df_etf = df
     st.subheader("📈 最新熱門 ETF 資訊（平均成交量 + Sharpe Ratio 排序）")
     st.dataframe(df, use_container_width=True)
 
 # -------------------------------
-# 計算個人化推薦
+# 10️⃣ 計算個人化推薦
 # -------------------------------
 if st.button("🚀 計算個人化推薦"):
     df = st.session_state.df_etf
     if df.empty:
         st.warning("請先按『📡 抓熱門 ETF 最新資訊』")
     else:
-        def sharpe_to_level(sharpe):
-            if sharpe > 1.0:
-                return "🔥很好"
-            elif sharpe >0.5:
-                return "🟡中等"
-            else:
-                return "🟢不佳"
+        theta = calculate_theta(age,horizon,loss_tol,market_react,expected_return,expected_dividend)
+        df["個人化分數"] = df.apply(lambda row: personal_score(row, theta), axis=1)
+        df["風險等級"] = df["Sharpe Ratio"].apply(lambda s: "🔥很好" if s>1.0 else ("🟡中等" if s>0.5 else "🟢不佳"))
+        df_sorted = df.sort_values("個人化分數", ascending=False)
+        st.subheader(f"📊 個人化推薦（θ-model 與 Sharpe Ratio 結合） θ值={theta}")
+        st.dataframe(df_sorted.head(TOP_N), use_container_width=True)
 
-        df["風險等級"] = df["Sharpe Ratio"].apply(sharpe_to_level)
-        st.subheader("📊 ETF 個人化推薦")
-        st.dataframe(df.head(TOP_N), use_container_width=True)
+st.info("📌 資料來源：Yahoo Finance + TWSE｜僅供參考，投資需自負風險")
