@@ -15,10 +15,9 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from datetime import datetime, timedelta
-import time
 
 st.set_page_config(page_title="台灣 ETF 智慧排序", layout="wide")
-st.title("📊 台灣熱門 ETF + 個人化風險排序 (永續更新)")
+st.title("📊 台灣熱門 ETF + 個人化風險排序 (穩定版)")
 
 CACHE_TTL = 300
 TOP_N = 5
@@ -26,52 +25,48 @@ TRADING_DAYS = 252
 LOOKBACK_DAYS = 5  # 計算平均成交量
 
 # -------------------------------
-# 1️⃣ 爬取熱門 ETF（TWSE 最近 5 日平均成交量）
+# 1️⃣ 穩定抓熱門 ETF（TWSE 最近 1~5 日平均成交量，帶 fallback）
 # -------------------------------
 @st.cache_data(ttl=CACHE_TTL)
 def fetch_hot_etf(n=10):
-    """
-    從 TWSE HTML table 抓每日 ETF 成交量，計算近 LOOKBACK_DAYS 平均成交量
-    """
-    try:
-        # TWSE 每日 ETF 成交量
-        base_url = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=html&date={date}"
-        today = datetime.now()
-        codes_volume = {}
+    fallback_list = ["0050.TW","0056.TW","006208.TW","00713.TW","00878.TW",
+                     "00692.TW","00900.TW","00695B.TW","00794B.TW","00772B.TW"]
+    base_url = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=html&date={date}"
+    today = datetime.now()
+    codes_volume = {}
+    
+    days_checked = 0
+    max_attempts = 10  # 最多嘗試 10 天避免卡住
+    day_offset = 0
 
-        # 抓最近 LOOKBACK_DAYS 的資料
-        days_checked = 0
-        day_offset = 0
-        while days_checked < LOOKBACK_DAYS:
-            date_str = (today - timedelta(days=day_offset)).strftime("%Y%m%d")
-            day_offset += 1
-            try:
-                tables = pd.read_html(base_url.format(date=date_str))
-                # 找含證券代號的表格
-                df_list = [t for t in tables if "證券代號" in t.columns]
-                if not df_list:
-                    continue
-                df = df_list[0]
-                df = df[df["證券代號"].str.endswith("B") | df["證券代號"].str.startswith(tuple("0123456789"))]
-                df["成交股數"] = pd.to_numeric(df["成交股數"].str.replace(",",""), errors="coerce")
-                df = df.dropna(subset=["成交股數"])
-                for idx, row in df.iterrows():
-                    code = str(row["證券代號"]) + ".TW"
-                    if code not in codes_volume:
-                        codes_volume[code] = []
-                    codes_volume[code].append(row["成交股數"])
-                days_checked += 1
-            except Exception:
+    while days_checked < LOOKBACK_DAYS and day_offset < max_attempts:
+        date_str = (today - timedelta(days=day_offset)).strftime("%Y%m%d")
+        day_offset += 1
+        try:
+            tables = pd.read_html(base_url.format(date=date_str))
+            df_list = [t for t in tables if "證券代號" in t.columns]
+            if not df_list:
                 continue
+            df = df_list[0]
+            df = df[df["證券代號"].str.endswith("B") | df["證券代號"].str.startswith(tuple("0123456789"))]
+            df["成交股數"] = pd.to_numeric(df["成交股數"].str.replace(",",""), errors="coerce")
+            df = df.dropna(subset=["成交股數"])
+            for idx, row in df.iterrows():
+                code = str(row["證券代號"]) + ".TW"
+                if code not in codes_volume:
+                    codes_volume[code] = []
+                codes_volume[code].append(row["成交股數"])
+            days_checked += 1
+        except Exception:
+            continue
 
-        # 計算平均成交量
-        avg_volume = {code: np.mean(vs) for code, vs in codes_volume.items()}
-        df_avg = pd.DataFrame.from_dict(avg_volume, orient="index", columns=["avg_volume"])
-        df_avg_sorted = df_avg.sort_values("avg_volume", ascending=False).head(n)
-        return df_avg_sorted.index.tolist()
-    except Exception:
-        # fallback: 固定 ETF 列表
-        return ["0050.TW","0056.TW","006208.TW","00713.TW","00878.TW","00692.TW","00900.TW","00695B.TW","00794B.TW","00772B.TW"]
+    if not codes_volume:
+        return fallback_list[:n]
+
+    avg_volume = {code: np.mean(vs) for code, vs in codes_volume.items()}
+    df_avg = pd.DataFrame.from_dict(avg_volume, orient="index", columns=["avg_volume"])
+    df_avg_sorted = df_avg.sort_values("avg_volume", ascending=False).head(n)
+    return df_avg_sorted.index.tolist()
 
 # -------------------------------
 # 2️⃣ ETF 型態 mapping
@@ -91,7 +86,7 @@ ETF_TYPE_MAPPING = {
 }
 
 # -------------------------------
-# 3️⃣ 抓 ETF 詳細資訊（100% 防呆）
+# 3️⃣ 抓 ETF 詳細資訊（防呆）
 # -------------------------------
 @st.cache_data(ttl=CACHE_TTL)
 def fetch_etf_info(code):
@@ -111,7 +106,6 @@ def fetch_etf_info(code):
             }
         price_now = history["Close"].iloc[-1]
 
-        # 股息
         if "Dividends" in history.columns:
             dividends = history["Dividends"].fillna(0)
             total_div = dividends.sum()
@@ -129,7 +123,6 @@ def fetch_etf_info(code):
             latest_div_value = 0.0
             latest_div_date = "N/A"
 
-        # 過去一年總報酬率
         price_1y_ago = history["Close"].iloc[0]
         total_return = (price_now + total_div)/price_1y_ago -1
         total_return = round(total_return*100,2)
@@ -193,29 +186,31 @@ market_react = cols[5].radio("📉 市場下跌 20%", ["立即賣出","持有觀
 # 抓熱門 ETF
 # -------------------------------
 if st.button("📡 抓熱門 ETF 最新資訊"):
-    etf_codes = fetch_hot_etf()
-    df_list = [fetch_etf_info(code) for code in etf_codes]
-    df = pd.DataFrame(df_list)
-    st.subheader("📈 最新熱門 ETF 資訊 (近 5 日平均成交量)")
-    st.dataframe(df, use_container_width=True)
+    with st.spinner("正在抓取熱門 ETF..."):
+        etf_codes = fetch_hot_etf()
+        df_list = [fetch_etf_info(code) for code in etf_codes]
+        df = pd.DataFrame(df_list)
+        st.subheader("📈 最新熱門 ETF 資訊 (近 1~5 日平均成交量)")
+        st.dataframe(df, use_container_width=True)
 
 # -------------------------------
 # 計算個人化推薦
 # -------------------------------
 if st.button("🚀 計算個人化推薦"):
-    etf_codes = fetch_hot_etf()
-    df_list = [fetch_etf_info(code) for code in etf_codes]
-    df = pd.DataFrame(df_list)
-    df["ETF風險指數"] = df.apply(compute_etf_risk_index,axis=1)
-    theta = calculate_theta(age,horizon,loss_tol,market_react,expected_return,expected_dividend)
-    if theta < -0.5:
-        level = "🟢保守型"
-    elif theta <0.8:
-        level = "🟡平衡型"
-    else:
-        level = "🔴積極型"
-    df["與投資人距離"] = (df["ETF風險指數"]-theta).abs()
-    st.subheader(f"📊 投資人 θ 值：{theta}  | 風險等級：{level}")
-    st.dataframe(df.sort_values("與投資人距離").head(TOP_N), use_container_width=True)
+    with st.spinner("計算個人化推薦中..."):
+        etf_codes = fetch_hot_etf()
+        df_list = [fetch_etf_info(code) for code in etf_codes]
+        df = pd.DataFrame(df_list)
+        df["ETF風險指數"] = df.apply(compute_etf_risk_index,axis=1)
+        theta = calculate_theta(age,horizon,loss_tol,market_react,expected_return,expected_dividend)
+        if theta < -0.5:
+            level = "🟢保守型"
+        elif theta <0.8:
+            level = "🟡平衡型"
+        else:
+            level = "🔴積極型"
+        df["與投資人距離"] = (df["ETF風險指數"]-theta).abs()
+        st.subheader(f"📊 投資人 θ 值：{theta}  | 風險等級：{level}")
+        st.dataframe(df.sort_values("與投資人距離").head(TOP_N), use_container_width=True)
 
-st.info("📌 資料來源：TWSE 近 5 日平均成交量 + Yahoo Finance｜僅供參考，投資需自負風險")
+st.info("📌 資料來源：TWSE 近 1~5 日平均成交量 + Yahoo Finance｜僅供參考，投資需自負風險")
