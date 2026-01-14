@@ -7,157 +7,215 @@ Original file is located at
     https://colab.research.google.com/drive/1Y1jRJvzhlUjdd66vnUOBj57YzwXHYc1s
 """
 
-# app.py
+# 01app.py
 # -*- coding: utf-8 -*-
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
+import altair as alt
 import requests
-import time
-import matplotlib.pyplot as plt
+from datetime import datetime, timedelta
 
-st.set_page_config(page_title="ETF Sharpe + θ 個人化推薦", layout="wide")
-st.title("📊 市場熱門 ETF × Sharpe × θ-model 個人化推薦")
+# =============================
+# 基本設定
+# =============================
+st.set_page_config(page_title="ETF 個人化風險推薦系統", layout="wide")
+st.title("📊 ETF 熱門排序 + Sharpe × θ-model 個人化推薦")
 
-# ===============================
-# 基本參數
-# ===============================
-RISK_FREE_RATE = 0.01  # 年化無風險利率（可改成台銀定存）
 TRADING_DAYS = 252
-MARKET_BENCH = "0050.TW"  # 市場基準
-TOP_N = 8
+RISK_FREE_RATE = 0.01  # 年化無風險利率（學術常用假設）
 
-# ===============================
-# STEP 1｜抓 TWSE ETF 日成交量
-# ===============================
+# =============================
+# 工具函數
+# =============================
+
 @st.cache_data(ttl=3600)
-def fetch_twse_etf_volume():
-    url = "https://www.twse.com.tw/exchangeReport/ETFDaily?response=json"
-    try:
-        r = requests.get(url, timeout=10)
-        data = r.json()["data"]
-        cols = ["代號", "名稱", "成交股數"]
-        df = pd.DataFrame(data, columns=cols)
-        df["成交股數"] = pd.to_numeric(df["成交股數"].str.replace(",", ""), errors="coerce")
-        df = df.dropna().sort_values("成交股數", ascending=False)
-        df["Ticker"] = df["代號"] + ".TW"
-        return df.head(10)
-    except:
-        return pd.DataFrame()
+def fetch_twse_etf_volume(days=3):
+    """
+    抓取 TWSE 最近 N 個交易日 ETF 成交量
+    若失敗則回傳空 DataFrame（fallback）
+    """
+    all_days = []
+    today = datetime.today()
 
-twse_df = fetch_twse_etf_volume()
-
-st.subheader("🔥 今日市場熱門 ETF（依成交量）")
-if twse_df.empty:
-    st.warning("⚠ 無法取得 TWSE 資料，啟用 fallback ETF")
-    hot_etfs = ["0050.TW", "00878.TW", "006208.TW"]
-else:
-    st.dataframe(twse_df[["代號", "名稱", "成交股數"]])
-    hot_etfs = twse_df["Ticker"].tolist()
-
-# ===============================
-# STEP 2｜Yahoo Finance + Sharpe + Beta
-# ===============================
-@st.cache_data(ttl=3600)
-def fetch_etf_metrics(tickers):
-    records = []
-
-    market = yf.download(MARKET_BENCH, period="1y", progress=False)["Adj Close"]
-    market_ret = market.pct_change().dropna()
-
-    for t in tickers:
+    for i in range(days * 2):
+        date = (today - timedelta(days=i)).strftime("%Y%m%d")
+        url = (
+            "https://www.twse.com.tw/exchangeReport/ETFDaily"
+            f"?response=json&date={date}"
+        )
         try:
-            price = yf.download(t, period="1y", progress=False)["Adj Close"]
-            ret = price.pct_change().dropna()
+            r = requests.get(url, timeout=5)
+            data = r.json()
+            if data.get("stat") != "OK":
+                continue
 
-            sharpe = (ret.mean() * TRADING_DAYS - RISK_FREE_RATE) / (ret.std() * np.sqrt(TRADING_DAYS))
-
-            beta = np.cov(ret, market_ret)[0][1] / np.var(market_ret)
-
-            records.append({
-                "ETF": t,
-                "Sharpe": sharpe,
-                "Beta": beta,
-                "Volatility": ret.std() * np.sqrt(TRADING_DAYS)
-            })
-        except:
+            df = pd.DataFrame(data["data"], columns=data["fields"])
+            df = df[["證券代號", "成交股數"]]
+            df["成交股數"] = pd.to_numeric(df["成交股數"].str.replace(",", ""), errors="coerce")
+            all_days.append(df)
+        except Exception:
             continue
 
-    return pd.DataFrame(records)
+        if len(all_days) >= days:
+            break
 
-metrics_df = fetch_etf_metrics(hot_etfs)
+    if not all_days:
+        return pd.DataFrame()
 
-# ===============================
-# STEP 3｜θ-model（連續、可解釋）
-# ===============================
-st.sidebar.header("🧠 投資人風險設定")
+    vol_df = pd.concat(all_days)
+    return (
+        vol_df
+        .groupby("證券代號")["成交股數"]
+        .mean()
+        .reset_index()
+        .rename(columns={"成交股數": "近N日平均成交量"})
+        .sort_values("近N日平均成交量", ascending=False)
+    )
 
-age = st.sidebar.slider("年齡", 20, 70, 35)
-experience = st.sidebar.slider("投資年資", 0, 30, 5)
-loss = st.sidebar.slider("最大可接受虧損 (%)", 5, 50, 20)
-expect_return = st.sidebar.slider("期望年化報酬 (%)", 3, 20, 8)
 
-# 標準化（學術常見作法）
-theta = (
-    (1 - age / 70) * 0.25 +
-    (experience / 30) * 0.25 +
-    (loss / 50) * 0.25 +
-    (expect_return / 20) * 0.25
-)
+@st.cache_data(ttl=3600)
+def fetch_price_data(ticker, period="1y"):
+    try:
+        df = yf.download(ticker, period=period, auto_adjust=True, progress=False)
+        if df.empty:
+            return None
+        return df
+    except Exception:
+        return None
 
-st.sidebar.metric("θ 風險承受度", round(theta, 2))
 
-# ===============================
-# STEP 4｜個人化排序（重點）
-# ===============================
-df = metrics_df.copy()
+def compute_sharpe(returns):
+    if returns.std() == 0:
+        return np.nan
+    return (
+        (returns.mean() * TRADING_DAYS - RISK_FREE_RATE)
+        / (returns.std() * np.sqrt(TRADING_DAYS))
+    )
 
-# Sharpe 標準化
-df["Sharpe_z"] = (df["Sharpe"] - df["Sharpe"].mean()) / df["Sharpe"].std()
 
-# Beta 偏離懲罰（市場風險）
-df["Beta_penalty"] = abs(df["Beta"] - 1)
+def compute_beta(asset_ret, market_ret):
+    cov = np.cov(asset_ret, market_ret)[0][1]
+    var = np.var(market_ret)
+    if var == 0:
+        return np.nan
+    return cov / var
 
-# θ 偏離（用波動率 proxy）
-df["ETF_risk_norm"] = (df["Volatility"] - df["Volatility"].min()) / (
-    df["Volatility"].max() - df["Volatility"].min()
-)
 
-df["Theta_gap"] = abs(theta - df["ETF_risk_norm"])
+def theta_score(age, exp_years, max_loss):
+    """
+    數據化 θ-model（0~1）
+    參考行為金融風險承受度量表（Grable & Lytton）
+    """
+    age_score = np.clip((60 - age) / 40, 0, 1)
+    exp_score = np.clip(exp_years / 20, 0, 1)
+    loss_score = np.clip(max_loss / 50, 0, 1)
 
-# ⭐ 最終個人化分數（學術 MCDA）
-df["Personal_Score"] = (
-    df["Sharpe_z"]
-    - 1.5 * df["Beta_penalty"]
-    - 3.0 * df["Theta_gap"]
-)
+    theta = 0.4 * age_score + 0.3 * exp_score + 0.3 * loss_score
+    return round(theta, 3)
+
+
+# =============================
+# STEP 1：熱門 ETF（先顯示）
+# =============================
+st.header("🔥 即時熱門 ETF（依 TWSE 近 N 日平均成交量）")
+
+days = st.slider("計算近幾個交易日平均成交量", 1, 5, 3)
+
+vol_df = fetch_twse_etf_volume(days)
+
+if vol_df.empty:
+    st.warning("⚠ 無法取得 TWSE 成交量資料，改用預設 ETF 清單")
+    hot_etfs = ["0050.TW", "006208.TW", "0056.TW", "00692.TW"]
+else:
+    hot_etfs = vol_df["證券代號"].head(10).apply(lambda x: f"{x}.TW").tolist()
+    st.dataframe(vol_df.head(10), use_container_width=True)
+
+# =============================
+# STEP 2：使用者 θ-model 輸入
+# =============================
+st.header("🧠 投資人風險屬性（θ-model）")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    age = st.slider("年齡", 18, 70, 35)
+
+with col2:
+    exp_years = st.slider("投資年資（年）", 0, 30, 5)
+
+with col3:
+    max_loss = st.slider("可接受最大虧損 (%)", 5, 50, 20)
+
+theta = theta_score(age, exp_years, max_loss)
+st.success(f"🎯 θ 值（0~1）：{theta}")
+
+# =============================
+# STEP 3：計算 Sharpe / Beta
+# =============================
+st.header("📐 Sharpe × Beta × 個人化排序")
+
+market_df = fetch_price_data("0050.TW")
+
+results = []
+
+for etf in hot_etfs:
+    price_df = fetch_price_data(etf)
+    if price_df is None or market_df is None:
+        continue
+
+    ret = price_df["Close"].pct_change().dropna()
+    mkt_ret = market_df["Close"].pct_change().dropna()
+
+    aligned = ret.align(mkt_ret, join="inner")
+    if len(aligned[0]) < 60:
+        continue
+
+    sharpe = compute_sharpe(aligned[0])
+    beta = compute_beta(aligned[0], aligned[1])
+
+    results.append({
+        "ETF": etf,
+        "Sharpe": sharpe,
+        "Beta": beta
+    })
+
+df = pd.DataFrame(results).dropna()
+
+# =============================
+# STEP 4：θ × Sharpe 個人化分數
+# =============================
+df["Sharpe_norm"] = (df["Sharpe"] - df["Sharpe"].min()) / (df["Sharpe"].max() - df["Sharpe"].min())
+df["Beta_penalty"] = abs(df["Beta"] - (1 + theta))
+df["Personal_Score"] = df["Sharpe_norm"] * (1 - df["Beta_penalty"].clip(0, 1))
 
 df = df.sort_values("Personal_Score", ascending=False)
 
-st.subheader("🎯 個人化 ETF 推薦排序")
-st.dataframe(df[["ETF", "Sharpe", "Beta", "Personal_Score"]])
-
-# ===============================
-# STEP 5｜視覺化（為什麼不同）
-# ===============================
-st.subheader("📈 為什麼推薦不同？（氣泡圖）")
-
-fig, ax = plt.subplots()
-scatter = ax.scatter(
-    df["Beta"],
-    df["Sharpe"],
-    s=(1 - df["Theta_gap"]) * 800,
-    alpha=0.7
+st.dataframe(
+    df[["ETF", "Sharpe", "Beta", "Personal_Score"]],
+    use_container_width=True
 )
 
-for _, row in df.iterrows():
-    ax.text(row["Beta"], row["Sharpe"], row["ETF"], fontsize=9)
+# =============================
+# STEP 5：視覺化（Altair）
+# =============================
+st.subheader("📊 為什麼推薦不同？（可解釋視覺化）")
 
-ax.set_xlabel("Beta（市場風險）")
-ax.set_ylabel("Sharpe Ratio")
-ax.axvline(1, linestyle="--", alpha=0.4)
-ax.set_title("Sharpe × Beta × θ 偏離量（氣泡越大＝越符合你）")
+chart = (
+    alt.Chart(df)
+    .mark_circle(opacity=0.7)
+    .encode(
+        x=alt.X("Beta:Q", title="Beta（市場風險）"),
+        y=alt.Y("Sharpe:Q", title="Sharpe Ratio"),
+        size=alt.Size("Personal_Score:Q", title="個人化分數", scale=alt.Scale(range=[200, 1200])),
+        color=alt.Color("Personal_Score:Q", scale=alt.Scale(scheme="viridis")),
+        tooltip=["ETF", "Sharpe", "Beta", "Personal_Score"]
+    )
+    .properties(height=450)
+)
 
-st.pyplot(fig)
+st.altair_chart(chart, use_container_width=True)
+
+st.caption("📚 Sharpe Ratio（Sharpe, 1966）、Beta（CAPM）、θ-model（行為金融風險承受度）")
