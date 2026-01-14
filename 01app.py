@@ -14,157 +14,194 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime, timedelta
+import plotly.express as px
+import plotly.graph_objects as go
 
-# ===============================
-# Streamlit 基本設定
-# ===============================
-st.set_page_config(page_title="台灣 ETF 個人化風險推薦", layout="wide")
-st.title("📊 台灣 ETF 熱門排行 × Sharpe + θ-model 個人化推薦")
+# =========================
+# 基本設定
+# =========================
+st.set_page_config(page_title="Sharpe + θ-model 個人化 ETF 推薦", layout="wide")
+st.title("📊 Sharpe + θ-model 可解釋個人化 ETF 推薦系統")
 
-CACHE_TTL = 3600
-TRADING_DAYS = 252
-MARKET_TICKER = "0050.TW"   # 市場基準（CAPM）
+st.caption("""
+📚 理論基礎：
+- Sharpe Ratio（Sharpe, 1966）
+- Beta / CAPM（Sharpe, 1964）
+- 流動性 proxy（Amihud, 2002）
+- 行為風險數值化（Behavioral Finance）
+""")
 
-# ===============================
-# 1️⃣ TWSE ETF 成交量（HTML 穩定版）
-# ===============================
-@st.cache_data(ttl=CACHE_TTL)
-def fetch_twse_etf_volume(days=3):
-    results = []
-    today = datetime.today()
+# =========================
+# ETF Universe（台灣主流）
+# =========================
+ETF_LIST = [
+    "0050.TW", "0056.TW", "006208.TW", "00878.TW",
+    "00713.TW", "00919.TW", "00929.TW",
+    "00679B.TWO", "00772B.TWO"
+]
 
-    for i in range(1, days * 3 + 1):
-        date = (today - timedelta(days=i)).strftime("%Y%m%d")
-        url = f"https://www.twse.com.tw/exchangeReport/ETFDaily?date={date}"
+MARKET_INDEX = "^TWII"
 
+# =========================
+# 工具函數
+# =========================
+
+@st.cache_data(ttl=3600)
+def fetch_hot_etfs(tickers, top_n=5):
+    """以 Yahoo Finance 平均成交量作為流動性 proxy
+    文獻：Amihud (2002), Fama & French (2015)
+    """
+    rows = []
+
+    for t in tickers:
         try:
-            tables = pd.read_html(url)
-            df = tables[0]
-            df.columns = df.columns.get_level_values(-1)
-
-            df = df[["證券代號", "成交股數"]]
-            df["成交股數"] = (
-                df["成交股數"]
-                .astype(str)
-                .str.replace(",", "")
-                .astype(float)
-            )
-
-            results.append(df)
-
-            if len(results) >= days:
-                break
-        except Exception:
+            info = yf.Ticker(t).info
+            rows.append({
+                "ticker": t,
+                "name": info.get("shortName", t),
+                "avg_volume": info.get("averageVolume", 0)
+            })
+        except:
             continue
 
-    if not results:
-        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df = df.sort_values("avg_volume", ascending=False)
+    return df.head(top_n)
 
-    vol_df = pd.concat(results)
 
-    return (
-        vol_df
-        .groupby("證券代號")["成交股數"]
-        .mean()
-        .reset_index()
-        .rename(columns={"成交股數": "近N日平均成交量"})
-        .sort_values("近N日平均成交量", ascending=False)
+@st.cache_data(ttl=3600)
+def calculate_metrics(ticker, market):
+    """Sharpe Ratio 與 Beta 計算
+    Sharpe (1966), CAPM
+    """
+    price = yf.download(ticker, period="1y", progress=False)["Adj Close"]
+    market_price = yf.download(market, period="1y", progress=False)["Adj Close"]
+
+    ret = price.pct_change().dropna()
+    mkt_ret = market_price.pct_change().dropna()
+
+    ret, mkt_ret = ret.align(mkt_ret, join="inner")
+
+    sharpe = (ret.mean() / ret.std()) * np.sqrt(252)
+    beta = np.cov(ret, mkt_ret)[0, 1] / np.var(mkt_ret)
+
+    return sharpe, beta
+
+
+def theta_model(age, experience, max_loss):
+    """θ-model：將投資人風險偏好數值化（可解釋）
+    非黑箱，對應行為金融
+    """
+    age_score = max(0, 1 - age / 70)
+    exp_score = min(experience / 10, 1)
+    loss_score = min(max_loss / 50, 1)
+
+    theta = 0.4 * age_score + 0.3 * exp_score + 0.3 * loss_score
+    return theta
+
+
+def personalized_score(sharpe, beta, theta):
+    """核心排序公式
+    Sharpe − |Beta − θ|
+    """
+    return sharpe - abs(beta - theta)
+
+
+# =========================
+# 使用者輸入（θ-model）
+# =========================
+st.sidebar.header("👤 投資人風險設定")
+
+age = st.sidebar.slider("年齡", 20, 70, 35)
+experience = st.sidebar.slider("投資年資（年）", 0, 20, 5)
+max_loss = st.sidebar.slider("最大可接受虧損 (%)", 5, 50, 20)
+
+theta = theta_model(age, experience, max_loss)
+
+st.sidebar.markdown(f"**θ 風險值： `{theta:.2f}`**")
+
+# =========================
+# 熱門 ETF
+# =========================
+st.header("🔥 市場熱門 ETF（依平均成交量）")
+
+hot_df = fetch_hot_etfs(ETF_LIST, top_n=5)
+st.dataframe(hot_df, use_container_width=True)
+
+# =========================
+# 計算指標
+# =========================
+records = []
+
+for _, row in hot_df.iterrows():
+    sharpe, beta = calculate_metrics(row["ticker"], MARKET_INDEX)
+    score = personalized_score(sharpe, beta, theta)
+
+    records.append({
+        "ETF": row["name"],
+        "Ticker": row["ticker"],
+        "Sharpe": sharpe,
+        "Beta": beta,
+        "θ": theta,
+        "個人化分數": score
+    })
+
+df = pd.DataFrame(records)
+df = df.sort_values("個人化分數", ascending=False)
+
+# =========================
+# 排序結果
+# =========================
+st.header("🏆 個人化 ETF 推薦排序")
+
+st.dataframe(
+    df.style.format({
+        "Sharpe": "{:.2f}",
+        "Beta": "{:.2f}",
+        "θ": "{:.2f}",
+        "個人化分數": "{:.2f}"
+    }),
+    use_container_width=True
+)
+
+# =========================
+# 📊 氣泡圖（Sharpe × Beta × 分數）
+# =========================
+st.header("📊 ETF 風險 × 報酬 × 個人化分數（氣泡圖）")
+
+fig_bubble = px.scatter(
+    df,
+    x="Beta",
+    y="Sharpe",
+    size="個人化分數",
+    color="ETF",
+    hover_data=["個人化分數"],
+    title="Sharpe × Beta × 個人化推薦強度"
+)
+
+st.plotly_chart(fig_bubble, use_container_width=True)
+
+# =========================
+# 📊 雷達圖（前三名）
+# =========================
+st.header("📐 Top 3 ETF 指標雷達圖")
+
+top3 = df.head(3)
+
+for _, r in top3.iterrows():
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatterpolar(
+        r=[r["Sharpe"], 1 - abs(r["Beta"] - theta), r["個人化分數"]],
+        theta=["Sharpe", "風險適配度", "個人化分數"],
+        fill='toself',
+        name=r["ETF"]
+    ))
+
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True)),
+        showlegend=True,
+        title=r["ETF"]
     )
 
-# ===============================
-# 2️⃣ Yahoo Finance ETF 資料
-# ===============================
-@st.cache_data(ttl=CACHE_TTL)
-def fetch_etf_price_data(ticker):
-    data = yf.download(ticker, period="1y", auto_adjust=True, progress=False)
-    return data["Close"] if not data.empty else pd.Series()
-
-# ===============================
-# 3️⃣ Sharpe Ratio
-# ===============================
-def compute_sharpe(returns):
-    if returns.std() == 0:
-        return 0.0
-    return (returns.mean() / returns.std()) * np.sqrt(TRADING_DAYS)
-
-# ===============================
-# 4️⃣ Beta（CAPM）
-# ===============================
-def compute_beta(asset_ret, market_ret):
-    if market_ret.var() == 0:
-        return 1.0
-    return np.cov(asset_ret, market_ret)[0, 1] / market_ret.var()
-
-# ===============================
-# 5️⃣ θ-model（數據化、固定範圍）
-# ===============================
-def calculate_theta(age, horizon, loss_tol, reaction):
-    """
-    θ ∈ [-1, +1]
-    """
-    theta = 0
-    theta += (40 - age) / 40 * 0.2
-    theta += horizon / 30 * 0.3
-    theta += loss_tol / 50 * 0.3
-    theta += {"立即賣出": -0.2, "持有觀望": 0.0, "逢低加碼": 0.2}[reaction]
-    return round(np.clip(theta, -1, 1), 2)
-
-# ===============================
-# 使用者輸入
-# ===============================
-st.subheader("👤 投資人風險設定")
-c1, c2, c3, c4 = st.columns(4)
-age = c1.slider("年齡", 20, 80, 35)
-horizon = c2.slider("投資年限（年）", 1, 30, 10)
-loss_tol = c3.slider("最大可接受損失 (%)", 0, 50, 15)
-reaction = c4.radio("市場下跌 20% 時", ["立即賣出", "持有觀望", "逢低加碼"])
-
-theta = calculate_theta(age, horizon, loss_tol, reaction)
-st.info(f"🎯 投資人 θ 值 = {theta}")
-
-# ===============================
-# 主流程
-# ===============================
-if st.button("🚀 計算熱門 ETF × 個人化推薦"):
-
-    # 1️⃣ 熱門 ETF（成交量）
-    vol_df = fetch_twse_etf_volume(days=3)
-    if vol_df.empty:
-        st.error("⚠ 無法取得 TWSE 成交量資料，請稍後再試")
-        st.stop()
-
-    hot_etfs = vol_df.head(10)["證券代號"].tolist()
-    hot_etfs = [f"{x}.TW" for x in hot_etfs]
-
-    market_price = fetch_etf_price_data(MARKET_TICKER)
-    market_ret = market_price.pct_change().dropna()
-
-    records = []
-
-    for etf in hot_etfs:
-        price = fetch_etf_price_data(etf)
-        if price.empty:
-            continue
-
-        ret = price.pct_change().dropna()
-
-        sharpe = compute_sharpe(ret)
-        beta = compute_beta(ret, market_ret)
-
-        # 個人化風險距離（Sharpe 高 + Beta 接近 θ 偏好）
-        personal_score = sharpe - abs(beta - (1 + theta))
-
-        records.append({
-            "ETF": etf,
-            "Sharpe Ratio": round(sharpe, 2),
-            "Beta": round(beta, 2),
-            "個人化分數": round(personal_score, 3)
-        })
-
-    result_df = pd.DataFrame(records).sort_values("個人化分數", ascending=False)
-
-    st.subheader("📈 熱門 ETF × 個人化推薦排序")
-    st.dataframe(result_df, use_container_width=True)
-
-st.caption("📌 資料來源：TWSE（HTML）、Yahoo Finance｜僅供研究與教學使用")
+    st.plotly_chart(fig, use_container_width=True)
