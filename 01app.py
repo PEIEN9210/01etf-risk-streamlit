@@ -165,7 +165,7 @@ st.altair_chart(bubble, use_container_width=True)
 
 # ===============================
 # ===============================
-# 雷達圖（Top 3 ETF）- 穩定版
+# 雷達圖（Top 3 ETF）- 真正多邊形穩定版
 # ===============================
 st.subheader("📡 Top 3 ETF 雷達圖（Sharpe / 報酬 / 波動 / Beta）")
 
@@ -187,55 +187,60 @@ radar = top3.melt(
     value_name="值"
 )
 
-# 正規化 0–1（學術上必要）
+# 正規化
 radar["值_norm"] = radar.apply(
     lambda r: r["值"] / metric_max[r["指標"]],
     axis=1
 )
 
-# 計算角度
-angles = {
-    m: i * 2 * np.pi / len(metrics)
-    for i, m in enumerate(metrics)
-}
-radar["角度"] = radar["指標"].map(angles)
+# 指標順序（非常重要）
+radar["order"] = radar["指標"].map({m: i for i, m in enumerate(metrics)})
 
-# 極座標 → 平面座標
+# 角度
+radar["角度"] = radar["order"] * 2 * np.pi / len(metrics)
+
+# 極座標 → 平面
 radar["x"] = radar["值_norm"] * np.cos(radar["角度"])
 radar["y"] = radar["值_norm"] * np.sin(radar["角度"])
 
-# 關閉多邊形（首尾相接）
+# 封閉多邊形
 radar_closed = pd.concat(
-    [radar, radar.groupby("ETF").head(1)],
+    [radar, radar.groupby("ETF").apply(lambda d: d.iloc[[0]]).reset_index(drop=True)],
     ignore_index=True
 )
 
-# 多邊形線
-line = alt.Chart(radar_closed).mark_line().encode(
+# ===== 多邊形面 =====
+area = alt.Chart(radar_closed).mark_area(
+    opacity=0.25
+).encode(
     x=alt.X("x:Q", axis=None),
     y=alt.Y("y:Q", axis=None),
-    color="ETF:N",
+    color=alt.Color("ETF:N", legend=alt.Legend(title="ETF")),
+    detail="ETF:N",
+    order="order:Q",
     tooltip=["ETF", "指標", "值"]
 )
 
-# 節點
-points = alt.Chart(radar_closed).mark_point(size=60).encode(
+# ===== 邊線 =====
+line = alt.Chart(radar_closed).mark_line().encode(
     x="x:Q",
     y="y:Q",
-    color="ETF:N"
+    color="ETF:N",
+    detail="ETF:N",
+    order="order:Q"
 )
 
-# 指標標籤
-labels = pd.DataFrame({
+# ===== 指標標籤 =====
+label_df = pd.DataFrame({
     "指標": metrics,
-    "x": [1.1 * np.cos(angles[m]) for m in metrics],
-    "y": [1.1 * np.sin(angles[m]) for m in metrics]
+    "x": [1.15 * np.cos(i * 2 * np.pi / len(metrics)) for i in range(len(metrics))],
+    "y": [1.15 * np.sin(i * 2 * np.pi / len(metrics)) for i in range(len(metrics))]
 })
 
-text = alt.Chart(labels).mark_text(fontSize=12).encode(
+labels = alt.Chart(label_df).mark_text(fontSize=12).encode(
     x="x:Q",
     y="y:Q",
     text="指標:N"
 )
 
-st.altair_chart(line + points + text, use_container_width=True)
+st.altair_chart(area + line + labels, use_container_width=True)
