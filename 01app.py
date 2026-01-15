@@ -164,13 +164,22 @@ bubble = alt.Chart(df_all).mark_circle(opacity=0.7).encode(
 st.altair_chart(bubble, use_container_width=True)
 
 # ===============================
-# 雷達圖（Top 3）
 # ===============================
-st.subheader("📡 Top 3 ETF 雷達圖")
+# 雷達圖（Top 3 ETF）- 穩定版
+# ===============================
+st.subheader("📡 Top 3 ETF 雷達圖（Sharpe / 報酬 / 波動 / Beta）")
 
-top3 = df_all.head(3)
-metrics = ["Sharpe","年化報酬%","年化波動%","Beta"]
+top3 = df_all.head(3).copy()
 
+metrics = ["Sharpe", "年化報酬%", "年化波動%", "Beta"]
+metric_max = {
+    "Sharpe": 3,
+    "年化報酬%": 50,
+    "年化波動%": 40,
+    "Beta": 2
+}
+
+# 長表
 radar = top3.melt(
     id_vars="ETF",
     value_vars=metrics,
@@ -178,27 +187,55 @@ radar = top3.melt(
     value_name="值"
 )
 
-angle_map = {
+# 正規化 0–1（學術上必要）
+radar["值_norm"] = radar.apply(
+    lambda r: r["值"] / metric_max[r["指標"]],
+    axis=1
+)
+
+# 計算角度
+angles = {
     m: i * 2 * np.pi / len(metrics)
     for i, m in enumerate(metrics)
 }
+radar["角度"] = radar["指標"].map(angles)
 
-radar["角度"] = radar["指標"].map(angle_map)
+# 極座標 → 平面座標
+radar["x"] = radar["值_norm"] * np.cos(radar["角度"])
+radar["y"] = radar["值_norm"] * np.sin(radar["角度"])
 
-radar = pd.concat([radar, radar.groupby("ETF").head(1)])
+# 關閉多邊形（首尾相接）
+radar_closed = pd.concat(
+    [radar, radar.groupby("ETF").head(1)],
+    ignore_index=True
+)
 
-radar_chart = alt.Chart(radar).mark_line().encode(
-    theta="角度:Q",
-    radius=alt.Radius("值:Q", scale=alt.Scale(zero=True)),
+# 多邊形線
+line = alt.Chart(radar_closed).mark_line().encode(
+    x=alt.X("x:Q", axis=None),
+    y=alt.Y("y:Q", axis=None),
+    color="ETF:N",
+    tooltip=["ETF", "指標", "值"]
+)
+
+# 節點
+points = alt.Chart(radar_closed).mark_point(size=60).encode(
+    x="x:Q",
+    y="y:Q",
     color="ETF:N"
 )
 
-radar_points = alt.Chart(radar).mark_point(size=60).encode(
-    theta="角度:Q",
-    radius="值:Q",
-    color="ETF:N"
+# 指標標籤
+labels = pd.DataFrame({
+    "指標": metrics,
+    "x": [1.1 * np.cos(angles[m]) for m in metrics],
+    "y": [1.1 * np.sin(angles[m]) for m in metrics]
+})
+
+text = alt.Chart(labels).mark_text(fontSize=12).encode(
+    x="x:Q",
+    y="y:Q",
+    text="指標:N"
 )
 
-st.altair_chart(radar_chart + radar_points, use_container_width=True)
-
-st.caption("📚 Sharpe (1966), CAPM, 行為風險匹配模型｜資料來源：Yahoo Finance")
+st.altair_chart(line + points + text, use_container_width=True)
