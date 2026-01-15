@@ -204,3 +204,47 @@ text = alt.Chart(labels).mark_text(fontSize=12).encode(
 )
 
 st.altair_chart(area + line + text, use_container_width=True)
+
+# ===============================
+# 氣泡圖（Sharpe × θ 適配 × Beta）
+# ===============================
+st.subheader("🫧 ETF 個人化氣泡圖（Sharpe × θ 偏離 × Beta）")
+
+bubble_df = df_all.copy()
+
+bubble = alt.Chart(bubble_df).mark_circle(
+    opacity=0.7,
+    stroke="black",
+    strokeWidth=0.5
+).encode(
+    x=alt.X(
+        "Sharpe:Q",
+        title="Sharpe Ratio（風險調整後報酬）",
+        scale=alt.Scale(zero=False)
+    ),
+    y=alt.Y(
+        "個人化分數:Q",
+        title="個人化適配分數（越高越適合）",
+        scale=alt.Scale(zero=True)
+    ),
+    size=alt.Size(
+        "Beta:Q",
+        title="Beta（系統性風險）",
+        scale=alt.Scale(range=[100, 1600])
+    ),
+    color=alt.Color(
+        "類型:N",
+        title="ETF 類型"
+    ),
+    tooltip=[
+        "ETF",
+        "Sharpe",
+        "Beta",
+        "年化報酬%",
+        "年化波動%",
+        "個人化分數"
+    ]
+)
+
+st.altair_chart(bubble, use_container_width=True)
+
