@@ -15,15 +15,16 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import altair as alt
+from datetime import datetime, timedelta
 
 # ===============================
 # 基本設定
 # ===============================
 st.set_page_config(page_title="台灣 ETF 個人化推薦系統", layout="wide")
-st.title("📊 台灣 ETF 個人化 + HotIndex ETF 推薦系統")
+st.title("📊 台灣 ETF 個人化 + HotIndex ETF 推薦系統 (Top N 自動更新)")
 
 TRADING_DAYS = 252
-RISK_FREE_RATE = 0.01  # 1年風險自由利率
+RISK_FREE_RATE = 0.01  # 無風險利率
 
 # ===============================
 # ETF Universe & 市場基準
@@ -40,9 +41,33 @@ ETF_LIST = {
 MARKET_BENCHMARK = "0050.TW"
 
 # ===============================
-# 資料抓取模組
+# Sidebar：使用者設定
 # ===============================
-@st.cache_data(ttl=3600)
+st.sidebar.header("👤 投資人風險設定")
+age = st.sidebar.slider("年齡", 20, 80, 35)
+horizon = st.sidebar.slider("投資年限（年）", 1, 30, 10)
+loss_tol = st.sidebar.slider("可接受最大損失 (%)", 0, 50, 20)
+reaction = st.sidebar.radio("市場下跌 20% 時", ["賣出", "觀望", "加碼"])
+theta = ((80-age)/60 + horizon/30 + loss_tol/50 + {"賣出":0,"觀望":0.5,"加碼":1}[reaction])/4
+theta = np.clip(theta,0,1)
+st.sidebar.metric("θ（風險偏好指數）", round(theta,2))
+
+# HotIndex vs 個人化分數權重
+st.sidebar.header("⚖️ 綜合分數權重")
+ALPHA = st.sidebar.slider(
+    "HotIndex 權重（個人化分數權重 = 1 - HotIndex 權重）",
+    0.0, 1.0, 0.5, step=0.05
+)
+st.sidebar.write(f"HotIndex 權重: {ALPHA:.2f} | 個人化分數權重: {1-ALPHA:.2f}")
+
+# Top N 顯示
+st.sidebar.header("📈 Top N ETF 顯示")
+TOP_N = st.sidebar.slider("Top N ETF", 1, len(ETF_LIST), 5)
+
+# ===============================
+# 抓取價格資料（含每日自動刷新）
+# ===============================
+@st.cache_data(ttl=86400)  # 每天自動更新一次
 def fetch_price_data(code, period="1y"):
     df = yf.Ticker(code).history(period=period)
     if df.empty or len(df) < 50:
@@ -50,7 +75,7 @@ def fetch_price_data(code, period="1y"):
     return df
 
 # ===============================
-# Sharpe / Beta 計算
+# 指標計算
 # ===============================
 def calc_metrics(df, market_df):
     r = df["Close"].pct_change().dropna()
@@ -60,67 +85,23 @@ def calc_metrics(df, market_df):
 
     ann_ret = r.mean() * TRADING_DAYS
     ann_vol = r.std() * np.sqrt(TRADING_DAYS)
-    sharpe = (ann_ret - RISK_FREE_RATE) / ann_vol if ann_vol > 0 else 0
-    beta = np.cov(r, mr)[0, 1] / np.var(mr)
+    sharpe = (ann_ret - RISK_FREE_RATE)/ann_vol if ann_vol>0 else 0
+    beta = np.cov(r,mr)[0,1]/np.var(mr)
+    return ann_ret*100, ann_vol*100, sharpe, beta
 
-    return ann_ret * 100, ann_vol * 100, sharpe, beta
-
-# ===============================
-# θ-model（行為金融）
-# ===============================
-def calc_theta(age, horizon, loss_tol, reaction):
-    score = 0
-    score += (80 - age) / 60
-    score += horizon / 30
-    score += loss_tol / 50
-    score += {"賣出": 0, "觀望": 0.5, "加碼": 1}[reaction]
-    return np.clip(score / 4, 0, 1)
-
-# ===============================
-# HotIndex 計算
-# ===============================
 def compute_hot_index(df, window=20):
-    """
-    HotIndex = volume_score_z + volatility_z + flow_z
-    """
     volume_ma = df["Volume"].rolling(window).mean().iloc[-1]
     returns = df["Close"].pct_change()
     volatility = returns.rolling(window).std().iloc[-1]
-    flow_proxy = (df["Close"] * df["Volume"]).rolling(window).mean().iloc[-1]
+    flow_proxy = (df["Close"]*df["Volume"]).rolling(window).mean().iloc[-1]
+    return {"volume_score":volume_ma, "volatility":volatility, "flow_proxy":flow_proxy}
 
-    return {"volume_score": volume_ma, "volatility": volatility, "flow_proxy": flow_proxy}
-
-# ===============================
-# robust z-score（兼容版本）
-# ===============================
 def robust_zscore(series):
     med = np.median(series)
     mad = np.median(np.abs(series - med))
-    if mad == 0:
-        return pd.Series(0, index=series.index)
-    return (series - med) / mad
-
-# ===============================
-# 使用者輸入（Sidebar）
-# ===============================
-st.sidebar.header("👤 投資人風險設定")
-age = st.sidebar.slider("年齡", 20, 80, 35)
-horizon = st.sidebar.slider("投資年限（年）", 1, 30, 10)
-loss_tol = st.sidebar.slider("可接受最大損失 (%)", 0, 50, 20)
-reaction = st.sidebar.radio("市場下跌 20% 時", ["賣出", "觀望", "加碼"])
-theta = calc_theta(age, horizon, loss_tol, reaction)
-st.sidebar.metric("θ（風險偏好指數）", round(theta, 2))
-
-# HotIndex vs 個人化分數權重滑桿
-st.sidebar.header("⚖️ 綜合分數權重")
-ALPHA = st.sidebar.slider(
-    "HotIndex 權重（個人化分數權重 = 1 - HotIndex 權重）",
-    min_value=0.0,
-    max_value=1.0,
-    value=0.5,
-    step=0.05
-)
-st.sidebar.write(f"HotIndex 權重: {ALPHA:.2f} | 個人化分數權重: {1-ALPHA:.2f}")
+    if mad==0:
+        return pd.Series(0,index=series.index)
+    return (series - med)/mad
 
 # ===============================
 # 主流程：計算 ETF 分數
@@ -133,90 +114,76 @@ for etf, etf_type in ETF_LIST.items():
     if df is None or market_df is None:
         continue
 
-    # 1️⃣ 計算 Sharpe / Beta
     ann_ret, ann_vol, sharpe, beta = calc_metrics(df, market_df)
 
-    # 2️⃣ 個人化理想值（θ anchor）
-    expected_return = 5 + theta * 20       # 5% ~ 25%
-    acceptable_vol = 10 + theta * 25        # 10% ~ 35%
-    ideal_beta = 0.7 + theta * 0.8          # 0.7 ~ 1.5
+    # 個人化適配
+    expected_return = 5 + theta*20
+    acceptable_vol = 10 + theta*25
+    ideal_beta = 0.7 + theta*0.8
 
-    # 3️⃣ 適配度分數
-    sharpe_fit = min(sharpe / 3, 1)
-    return_fit = 1 - abs(ann_ret - expected_return) / expected_return
-    return_fit = np.clip(return_fit, 0, 1)
-    vol_fit = 1 - ann_vol / acceptable_vol
-    vol_fit = np.clip(vol_fit, 0, 1)
-    beta_fit = 1 - abs(beta - ideal_beta) / ideal_beta
-    beta_fit = np.clip(beta_fit, 0, 1)
+    sharpe_fit = min(sharpe/3,1)
+    return_fit = np.clip(1 - abs(ann_ret-expected_return)/expected_return,0,1)
+    vol_fit = np.clip(1 - ann_vol/acceptable_vol,0,1)
+    beta_fit = np.clip(1 - abs(beta-ideal_beta)/ideal_beta,0,1)
     personal_score = np.mean([sharpe_fit, return_fit, vol_fit, beta_fit])
 
-    # 4️⃣ HotIndex 計算
+    # HotIndex
     hot_metrics = compute_hot_index(df)
-    rows.append({
-        "ETF": etf,
-        "類型": etf_type,
-        "最新價": round(df["Close"].iloc[-1], 2),
-        "Sharpe": round(sharpe, 2),
-        "Beta": round(beta, 2),
-        "年化報酬%": round(ann_ret, 2),
-        "年化波動%": round(ann_vol, 2),
-        "Sharpe適配": round(sharpe_fit, 2),
-        "報酬適配": round(return_fit, 2),
-        "波動適配": round(vol_fit, 2),
-        "Beta適配": round(beta_fit, 2),
-        "個人化分數": round(personal_score, 3),
-        "volume_score": hot_metrics["volume_score"],
-        "volatility": hot_metrics["volatility"],
-        "flow_proxy": hot_metrics["flow_proxy"],
-    })
+    row = {
+        "ETF":etf,
+        "類型":etf_type,
+        "最新價":round(df["Close"].iloc[-1],2),
+        "Sharpe":round(sharpe,2),
+        "Beta":round(beta,2),
+        "年化報酬%":round(ann_ret,2),
+        "年化波動%":round(ann_vol,2),
+        "個人化分數":round(personal_score,3),
+        "volume_score":hot_metrics["volume_score"],
+        "volatility":hot_metrics["volatility"],
+        "flow_proxy":hot_metrics["flow_proxy"],
+        "Sharpe適配":round(sharpe_fit,2),
+        "報酬適配":round(return_fit,2),
+        "波動適配":round(vol_fit,2),
+        "Beta適配":round(beta_fit,2)
+    }
+    rows.append(row)
 
-# ===============================
-# DataFrame 與 HotIndex 標準化
-# ===============================
 df_all = pd.DataFrame(rows)
 
 # HotIndex z-score
-for col in ["volume_score", "volatility", "flow_proxy"]:
-    df_all[col + "_z"] = robust_zscore(df_all[col])
+for col in ["volume_score","volatility","flow_proxy"]:
+    df_all[col+"_z"] = robust_zscore(df_all[col])
 df_all["hot_index"] = df_all[["volume_score_z","volatility_z","flow_proxy_z"]].sum(axis=1)
 
-# 綜合最終分數：個人化 + HotIndex
-df_all["final_score"] = ALPHA * df_all["hot_index"] + (1 - ALPHA) * df_all["個人化分數"]
-df_all = df_all.sort_values("final_score", ascending=False)
+# 最終綜合分數
+df_all["final_score"] = ALPHA*df_all["hot_index"] + (1-ALPHA)*df_all["個人化分數"]
+df_all = df_all.sort_values("final_score",ascending=False)
+df_all_top = df_all.head(TOP_N)
 
 # ===============================
 # 表格顯示
 # ===============================
-st.subheader("🎯 個人化 + HotIndex ETF 排序")
-st.dataframe(df_all[[
-    "ETF","類型","最新價","Sharpe","Beta",
-    "年化報酬%","年化波動%",
+st.subheader(f"🎯 Top {TOP_N} ETF 排序（HotIndex + 個人化分數）")
+st.dataframe(df_all_top[[
+    "ETF","類型","最新價","Sharpe","Beta","年化報酬%","年化波動%",
     "個人化分數","hot_index","final_score"
-]], use_container_width=True)
+]],use_container_width=True)
 
 # ===============================
-# 雷達圖（Top 3 ETF）
+# 雷達圖
 # ===============================
-st.subheader("📡 Top 3 ETF 個人化雷達圖（適配度）")
-top3 = df_all.head(3)
-metrics = ["Sharpe適配", "報酬適配", "波動適配", "Beta適配"]
-
-radar = top3.melt(
-    id_vars="ETF",
-    value_vars=metrics,
-    var_name="指標",
-    value_name="值"
-)
+st.subheader(f"📡 Top {TOP_N} ETF 雷達圖（適配度）")
+metrics = ["Sharpe適配","報酬適配","波動適配","Beta適配"]
+radar = df_all_top.melt(id_vars="ETF",value_vars=metrics,var_name="指標",value_name="值")
 radar["order"] = radar["指標"].map({m:i for i,m in enumerate(metrics)})
-radar["角度"] = radar["order"] * 2 * np.pi / len(metrics)
-radar["x"] = radar["值"] * np.cos(radar["角度"])
-radar["y"] = radar["值"] * np.sin(radar["角度"])
-radar_closed = pd.concat([radar, radar.groupby("ETF").apply(lambda d: d.iloc[[0]]).reset_index(drop=True)], ignore_index=True)
+radar["角度"] = radar["order"]*2*np.pi/len(metrics)
+radar["x"] = radar["值"]*np.cos(radar["角度"])
+radar["y"] = radar["值"]*np.sin(radar["角度"])
+radar_closed = pd.concat([radar, radar.groupby("ETF").apply(lambda d:d.iloc[[0]]).reset_index(drop=True)],ignore_index=True)
 
 area = alt.Chart(radar_closed).mark_area(opacity=0.3).encode(
-    x=alt.X("x:Q", axis=None),
-    y=alt.Y("y:Q", axis=None),
+    x=alt.X("x:Q",axis=None),
+    y=alt.Y("y:Q",axis=None),
     color="ETF:N",
     detail="ETF:N",
     order="order:Q",
@@ -230,22 +197,22 @@ line = alt.Chart(radar_closed).mark_line().encode(
     order="order:Q"
 )
 labels = pd.DataFrame({
-    "指標": metrics,
-    "x": [1.2*np.cos(i*2*np.pi/len(metrics)) for i in range(len(metrics))],
-    "y": [1.2*np.sin(i*2*np.pi/len(metrics)) for i in range(len(metrics))]
+    "指標":metrics,
+    "x":[1.2*np.cos(i*2*np.pi/len(metrics)) for i in range(len(metrics))],
+    "y":[1.2*np.sin(i*2*np.pi/len(metrics)) for i in range(len(metrics))]
 })
 text = alt.Chart(labels).mark_text(fontSize=12).encode(x="x:Q",y="y:Q",text="指標:N")
-st.altair_chart(area + line + text, use_container_width=True)
+st.altair_chart(area+line+text,use_container_width=True)
 
 # ===============================
-# 氣泡圖（Sharpe × θ 適配 × Beta）
+# 氣泡圖
 # ===============================
-st.subheader("🫧 ETF 個人化氣泡圖（Sharpe × θ 偏離 × Beta）")
-bubble = alt.Chart(df_all).mark_circle(opacity=0.7,stroke="black",strokeWidth=0.5).encode(
-    x=alt.X("Sharpe:Q", title="Sharpe Ratio（風險調整後報酬）", scale=alt.Scale(zero=False)),
-    y=alt.Y("個人化分數:Q", title="個人化適配分數（越高越適合）", scale=alt.Scale(zero=True)),
-    size=alt.Size("Beta:Q", title="Beta（系統性風險）", scale=alt.Scale(range=[100,1600])),
+st.subheader(f"🫧 Top {TOP_N} ETF 氣泡圖（Sharpe × 個人化分數 × Beta）")
+bubble = alt.Chart(df_all_top).mark_circle(opacity=0.7,stroke="black",strokeWidth=0.5).encode(
+    x=alt.X("Sharpe:Q", title="Sharpe Ratio", scale=alt.Scale(zero=False)),
+    y=alt.Y("個人化分數:Q", title="個人化分數", scale=alt.Scale(zero=True)),
+    size=alt.Size("Beta:Q", title="Beta", scale=alt.Scale(range=[100,1600])),
     color=alt.Color("類型:N", title="ETF 類型"),
-    tooltip=["ETF","Sharpe","Beta","年化報酬%","年化波動%","個人化分數","hot_index","final_score"]
+    tooltip=["ETF","Sharpe","Beta","個人化分數","hot_index","final_score"]
 )
 st.altair_chart(bubble,use_container_width=True)
