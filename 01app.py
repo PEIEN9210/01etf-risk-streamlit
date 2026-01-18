@@ -91,7 +91,14 @@ def compute_hot_index(df, window=20):
     return {"volume_score": volume_ma, "volatility": volatility, "flow_proxy": flow_proxy}
 
 def robust_zscore(series):
-    return (series - series.median()) / series.mad()
+    """
+    兼容版本的 MAD robust z-score
+    """
+    med = np.median(series)
+    mad = np.median(np.abs(series - med))
+    if mad == 0:
+        return pd.Series(0, index=series.index)
+    return (series - med) / mad
 
 # ===============================
 # 使用者輸入（Sidebar）
