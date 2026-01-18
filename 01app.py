@@ -20,7 +20,7 @@ import altair as alt
 # 基本設定
 # ===============================
 st.set_page_config(page_title="台灣 ETF 個人化推薦系統", layout="wide")
-st.title("📊 台灣 ETF 個人化推薦（Sharpe + Beta + θ-model + HotIndex）")
+st.title("📊 台灣 ETF 個人化 + HotIndex ETF 推薦系統")
 
 TRADING_DAYS = 252
 RISK_FREE_RATE = 0.01  # 1年風險自由利率
@@ -77,7 +77,7 @@ def calc_theta(age, horizon, loss_tol, reaction):
     return np.clip(score / 4, 0, 1)
 
 # ===============================
-# HotIndex 計算（市場熱門指標）
+# HotIndex 計算
 # ===============================
 def compute_hot_index(df, window=20):
     """
@@ -90,10 +90,10 @@ def compute_hot_index(df, window=20):
 
     return {"volume_score": volume_ma, "volatility": volatility, "flow_proxy": flow_proxy}
 
+# ===============================
+# robust z-score（兼容版本）
+# ===============================
 def robust_zscore(series):
-    """
-    兼容版本的 MAD robust z-score
-    """
     med = np.median(series)
     mad = np.median(np.abs(series - med))
     if mad == 0:
@@ -110,6 +110,17 @@ loss_tol = st.sidebar.slider("可接受最大損失 (%)", 0, 50, 20)
 reaction = st.sidebar.radio("市場下跌 20% 時", ["賣出", "觀望", "加碼"])
 theta = calc_theta(age, horizon, loss_tol, reaction)
 st.sidebar.metric("θ（風險偏好指數）", round(theta, 2))
+
+# HotIndex vs 個人化分數權重滑桿
+st.sidebar.header("⚖️ 綜合分數權重")
+ALPHA = st.sidebar.slider(
+    "HotIndex 權重（個人化分數權重 = 1 - HotIndex 權重）",
+    min_value=0.0,
+    max_value=1.0,
+    value=0.5,
+    step=0.05
+)
+st.sidebar.write(f"HotIndex 權重: {ALPHA:.2f} | 個人化分數權重: {1-ALPHA:.2f}")
 
 # ===============================
 # 主流程：計算 ETF 分數
@@ -171,14 +182,13 @@ for col in ["volume_score", "volatility", "flow_proxy"]:
 df_all["hot_index"] = df_all[["volume_score_z","volatility_z","flow_proxy_z"]].sum(axis=1)
 
 # 綜合最終分數：個人化 + HotIndex
-ALPHA = 0.5  # 權重可調
 df_all["final_score"] = ALPHA * df_all["hot_index"] + (1 - ALPHA) * df_all["個人化分數"]
 df_all = df_all.sort_values("final_score", ascending=False)
 
 # ===============================
 # 表格顯示
 # ===============================
-st.subheader("🎯 個人化 + 熱門 ETF 排序")
+st.subheader("🎯 個人化 + HotIndex ETF 排序")
 st.dataframe(df_all[[
     "ETF","類型","最新價","Sharpe","Beta",
     "年化報酬%","年化波動%",
@@ -236,6 +246,6 @@ bubble = alt.Chart(df_all).mark_circle(opacity=0.7,stroke="black",strokeWidth=0.
     y=alt.Y("個人化分數:Q", title="個人化適配分數（越高越適合）", scale=alt.Scale(zero=True)),
     size=alt.Size("Beta:Q", title="Beta（系統性風險）", scale=alt.Scale(range=[100,1600])),
     color=alt.Color("類型:N", title="ETF 類型"),
-    tooltip=["ETF","Sharpe","Beta","年化報酬%","年化波動%","個人化分數","hot_index"]
+    tooltip=["ETF","Sharpe","Beta","年化報酬%","年化波動%","個人化分數","hot_index","final_score"]
 )
 st.altair_chart(bubble,use_container_width=True)
