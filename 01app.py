@@ -48,8 +48,44 @@ age = st.sidebar.slider("年齡", 20, 80, 35)
 horizon = st.sidebar.slider("投資年限（年）", 1, 30, 10)
 loss_tol = st.sidebar.slider("可接受最大損失 (%)", 0, 50, 20)
 reaction = st.sidebar.radio("市場下跌 20% 時", ["賣出", "觀望", "加碼"])
-theta = ((80-age)/60 + horizon/30 + loss_tol/50 + {"賣出":0,"觀望":0.5,"加碼":1}[reaction])/4
-theta = np.clip(theta,0,1)
+st.sidebar.header("👤 投資人風險設定")
+age = st.sidebar.slider("年齡", 20, 80, 35)
+horizon = st.sidebar.slider("投資年限（年）", 1, 30, 10)
+loss_tol = st.sidebar.slider("可接受最大損失 (%)", 0, 50, 20)
+reaction = st.sidebar.radio("市場下跌 20% 時", ["賣出", "觀望", "加碼"])
+
+# ===============================
+# θ-model：Behavioral Risk Aversion Proxy
+# ===============================
+
+# 年齡：非線性生命週期效果（中壯年風險承擔較高）
+age_score = np.exp(-((age - 35) ** 2) / 450)
+
+# 投資年限：邊際效用遞減
+horizon_score = np.log1p(horizon) / np.log1p(30)
+
+# 心理可接受損失（直接揭露風險容忍）
+loss_score = loss_tol / 50
+
+# 下跌時行為反應（revealed preference）
+reaction_score = {
+    "賣出": 0.0,
+    "觀望": 0.5,
+    "加碼": 1.0
+}[reaction]
+
+# θ 加權整合（心理 > 行為 > 人口背景）
+theta_raw = (
+    0.35 * loss_score +
+    0.25 * reaction_score +
+    0.20 * age_score +
+    0.20 * horizon_score
+)
+
+theta = np.clip(theta_raw, 0, 1)
+
+st.sidebar.metric("θ（風險偏好指數）", round(theta, 2))
+
 st.sidebar.metric("θ（風險偏好指數）", round(theta,2))
 
 # HotIndex vs 個人化分數權重
