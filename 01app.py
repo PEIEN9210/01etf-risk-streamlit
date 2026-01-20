@@ -63,35 +63,6 @@ reaction = st.sidebar.radio(
     key="reaction_radio"
 )
 
-# ===============================
-# θ-model：Behavioral Risk Aversion Proxy
-# ===============================
-
-age_score = np.exp(-((age - 35) ** 2) / 450)
-horizon_score = np.log1p(horizon) / np.log1p(30)
-loss_score = loss_tol / 50
-
-reaction_score = {
-    "賣出": 0.0,
-    "觀望": 0.5,
-    "加碼": 1.0
-}[reaction]
-
-theta_raw = (
-    0.35 * loss_score +
-    0.25 * reaction_score +
-    0.20 * age_score +
-    0.20 * horizon_score
-)
-
-theta = np.clip(theta_raw, 0, 1)
-
-st.sidebar.metric(
-    "θ（風險偏好指數）",
-    round(theta, 2),
-    help="Behavioral proxy of investor risk aversion (0 = conservative, 1 = aggressive)"
-)
-
 
 # ===============================
 # θ-model：Behavioral Risk Aversion Proxy
