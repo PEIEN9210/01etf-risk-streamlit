@@ -44,15 +44,54 @@ MARKET_BENCHMARK = "0050.TW"
 # Sidebar：使用者設定
 # ===============================
 st.sidebar.header("👤 投資人風險設定")
-age = st.sidebar.slider("年齡", 20, 80, 35)
-horizon = st.sidebar.slider("投資年限（年）", 1, 30, 10)
-loss_tol = st.sidebar.slider("可接受最大損失 (%)", 0, 50, 20)
-reaction = st.sidebar.radio("市場下跌 20% 時", ["賣出", "觀望", "加碼"])
-st.sidebar.header("👤 投資人風險設定")
-age = st.sidebar.slider("年齡", 20, 80, 35)
-horizon = st.sidebar.slider("投資年限（年）", 1, 30, 10)
-loss_tol = st.sidebar.slider("可接受最大損失 (%)", 0, 50, 20)
-reaction = st.sidebar.radio("市場下跌 20% 時", ["賣出", "觀望", "加碼"])
+
+age = st.sidebar.slider(
+    "年齡", 20, 80, 35, key="age_slider"
+)
+
+horizon = st.sidebar.slider(
+    "投資年限（年）", 1, 30, 10, key="horizon_slider"
+)
+
+loss_tol = st.sidebar.slider(
+    "可接受最大損失 (%)", 0, 50, 20, key="loss_tol_slider"
+)
+
+reaction = st.sidebar.radio(
+    "市場下跌 20% 時",
+    ["賣出", "觀望", "加碼"],
+    key="reaction_radio"
+)
+
+# ===============================
+# θ-model：Behavioral Risk Aversion Proxy
+# ===============================
+
+age_score = np.exp(-((age - 35) ** 2) / 450)
+horizon_score = np.log1p(horizon) / np.log1p(30)
+loss_score = loss_tol / 50
+
+reaction_score = {
+    "賣出": 0.0,
+    "觀望": 0.5,
+    "加碼": 1.0
+}[reaction]
+
+theta_raw = (
+    0.35 * loss_score +
+    0.25 * reaction_score +
+    0.20 * age_score +
+    0.20 * horizon_score
+)
+
+theta = np.clip(theta_raw, 0, 1)
+
+st.sidebar.metric(
+    "θ（風險偏好指數）",
+    round(theta, 2),
+    help="Behavioral proxy of investor risk aversion (0 = conservative, 1 = aggressive)"
+)
+
 
 # ===============================
 # θ-model：Behavioral Risk Aversion Proxy
