@@ -94,8 +94,6 @@ theta_raw = (
 
 theta = np.clip(theta_raw, 0, 1)
 
-st.sidebar.metric("θ（風險偏好指數）", round(theta, 2))
-
 st.sidebar.metric("θ（風險偏好指數）", round(theta,2))
 
 # HotIndex vs 個人化分數權重
