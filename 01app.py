@@ -169,18 +169,89 @@ for col in ["volume_score","volatility","flow_proxy"]:
     df_all[col+"_z"] = robust_zscore(df_all[col])
 df_all["hot_index"] = df_all[["volume_score_z","volatility_z","flow_proxy_z"]].sum(axis=1)
 
-# 最終綜合分數
-df_all["final_score"] = ALPHA*df_all["hot_index"] + (1-ALPHA)*df_all["個人化分數"]
+# ===============================
+# 計算個人化分數 component（θ 驅動）
+# ===============================
+def compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta):
+    """
+    計算四個 component：
+    return_fit、sharpe_fit、vol_fit、beta_fit
+    theta 驅動個人風險偏好
+    """
+    expected_return = 5 + theta*20
+    acceptable_vol = 10 + theta*25
+    ideal_beta = 0.7 + theta*0.8
+
+    sharpe_fit = min(sharpe/3,1)
+    return_fit = np.clip(1 - abs(ann_ret-expected_return)/expected_return,0,1)
+    vol_fit = np.clip(1 - ann_vol/acceptable_vol,0,1)
+    beta_fit = np.clip(1 - abs(beta-ideal_beta)/ideal_beta,0,1)
+
+    personal_score = np.mean([sharpe_fit, return_fit, vol_fit, beta_fit])
+
+    components = {
+        "personal_score": personal_score,
+        "sharpe_fit": sharpe_fit,
+        "return_fit": return_fit,
+        "vol_fit": vol_fit,
+        "beta_fit": beta_fit
+    }
+    return components
 
 # ===============================
-# 排序依選擇
+# 計算 final_score（UI / Top-N 用）
 # ===============================
-if sort_option == "Final Score (HotIndex + 個人化)":
-    df_all = df_all.sort_values("final_score",ascending=False)
-elif sort_option == "風險適配分數（依 θ）":
-    df_all = df_all.sort_values("風險適配分數",ascending=False)
+def compute_final_score(hot_index, personal_score, ALPHA=0.5):
+    """
+    final_score = ALPHA * HotIndex + (1-ALPHA) * 個人化分數
+    ALPHA 可調，用於 UI/Top-N 展示
+    """
+    return ALPHA*hot_index + (1-ALPHA)*personal_score
 
-df_all_top = df_all.head(TOP_N)
+# ===============================
+# 支援不同 θ 的個人化排序（方法一 Ranking Robustness）
+# ===============================
+THETA_LIST = [0.0, 0.25, 0.5, 0.75, 1.0]
+theta_rankings = {}
+
+for theta in THETA_LIST:
+    rows = []
+    for etf, etf_type in ETF_LIST.items():
+        df = fetch_price_data(etf)
+        if df is None or market_df is None:
+            continue
+        ann_ret, ann_vol, sharpe, beta = calc_metrics(df, market_df)
+        # 個人化 component
+        comp = compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta)
+        # HotIndex
+        hot_metrics = compute_hot_index(df)
+        # final_score scalar
+        final_score = compute_final_score(hot_metrics["volume_score"] + hot_metrics["flow_proxy"] - hot_metrics["volatility"], 
+                                          comp["personal_score"], ALPHA=ALPHA)
+        row = {
+            "ETF": etf,
+            "類型": etf_type,
+            "θ": theta,
+            "final_score": final_score,
+            **comp,
+            "hot_index": hot_metrics["volume_score"] + hot_metrics["flow_proxy"] - hot_metrics["volatility"]
+        }
+        rows.append(row)
+    df_theta = pd.DataFrame(rows)
+    df_theta = df_theta.sort_values("final_score", ascending=False)
+    theta_rankings[theta] = df_theta  # 分 θ Top-N 排序，支援 Spearman / Top-N overlap
+
+# ===============================
+# UI / Top-N 展示（以 final_score scalar）
+# ===============================
+theta_display = 0.5  # 可以設定 UI 上顯示哪個 θ 的 scalar final_score
+df_ui = theta_rankings[theta_display].head(TOP_N)
+st.subheader(f"🎯 Top {TOP_N} ETF 排序（θ={theta_display}, final_score）")
+st.dataframe(df_ui[[
+    "ETF","類型","final_score","personal_score",
+    "sharpe_fit","return_fit","vol_fit","beta_fit","hot_index"
+]], use_container_width=True)
+
 
 # ===============================
 # 表格顯示
