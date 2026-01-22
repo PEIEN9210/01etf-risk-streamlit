@@ -54,30 +54,26 @@ st.sidebar.metric("θ（風險偏好指數）", round(theta,2))
 
 # HotIndex vs 個人化分數權重
 st.sidebar.header("⚖️ 綜合分數權重")
-ALPHA = st.sidebar.slider(
-    "HotIndex 權重（個人化分數權重 = 1 - HotIndex 權重）",
-    0.0, 1.0, 0.5, step=0.05
-)
+ALPHA = st.sidebar.slider("HotIndex 權重（個人化分數權重 = 1 - HotIndex 權重）",
+                          0.0,1.0,0.5,step=0.05)
 st.sidebar.write(f"HotIndex 權重: {ALPHA:.2f} | 個人化分數權重: {1-ALPHA:.2f}")
-
-# 排序選項
-st.sidebar.header("📊 排序選項")
-sort_option = st.sidebar.selectbox(
-    "選擇排序依據",
-    ["Final Score (HotIndex + 個人化)","風險適配分數（依 θ）"]
-)
 
 # Top N 顯示
 st.sidebar.header("📈 Top N ETF 顯示")
 TOP_N = st.sidebar.slider("Top N ETF", 1, len(ETF_LIST), 5)
 
+# θ 顯示選擇（支援 Ranking Robustness 展示）
+theta_display = st.sidebar.select_slider("選擇 θ 顯示 Top-N",
+                                         options=[0.0,0.25,0.5,0.75,1.0],
+                                         value=0.5)
+
 # ===============================
-# 抓取價格資料
+# 抓取價格資料（含每日自動刷新）
 # ===============================
 @st.cache_data(ttl=86400)
 def fetch_price_data(code, period="1y"):
     df = yf.Ticker(code).history(period=period)
-    if df.empty or len(df) < 50:
+    if df.empty or len(df)<50:
         return None
     return df
 
@@ -89,7 +85,6 @@ def calc_metrics(df, market_df):
     mr = market_df["Close"].pct_change().dropna()
     idx = r.index.intersection(mr.index)
     r, mr = r.loc[idx], mr.loc[idx]
-
     ann_ret = r.mean() * TRADING_DAYS
     ann_vol = r.std() * np.sqrt(TRADING_DAYS)
     sharpe = (ann_ret - RISK_FREE_RATE)/ann_vol if ann_vol>0 else 0
@@ -103,14 +98,10 @@ def compute_hot_index(df, window=20):
     flow_proxy = (df["Close"]*df["Volume"]).rolling(window).mean().iloc[-1]
     return {"volume_score":volume_ma, "volatility":volatility, "flow_proxy":flow_proxy}
 
-# ===============================
-# Robust Z-score
-# ===============================
 def robust_zscore(series):
     med = np.median(series)
     mad = np.median(np.abs(series - med))
-    if mad==0:
-        return pd.Series(0,index=series.index)
+    if mad==0: return pd.Series(0,index=series.index)
     return (series - med)/mad
 
 # ===============================
@@ -144,42 +135,39 @@ def compute_final_score(hot_index, personal_score, ALPHA=0.5):
     return ALPHA*hot_index + (1-ALPHA)*personal_score
 
 # ===============================
-# 主流程：支援不同 θ 的個人化排序（方法一 Ranking Robustness）
+# 抓取市場資料 & 計算 HotIndex z-score
 # ===============================
 market_df = fetch_price_data(MARKET_BENCHMARK)
-THETA_LIST = [0.0, 0.25, 0.5, 0.75, 1.0]
 theta_rankings = {}
 
-for theta_val in THETA_LIST:
+for t in [0.0,0.25,0.5,0.75,1.0]:
     rows = []
     for etf, etf_type in ETF_LIST.items():
         df = fetch_price_data(etf)
         if df is None or market_df is None:
             continue
         ann_ret, ann_vol, sharpe, beta = calc_metrics(df, market_df)
-        comp = compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta_val)
+        comp = compute_personalized_score(ann_ret, ann_vol, sharpe, beta, t)
         hot_metrics = compute_hot_index(df)
-        hot_index_scalar = hot_metrics["volume_score"] + hot_metrics["flow_proxy"] - hot_metrics["volatility"]
-        final_score = compute_final_score(hot_index_scalar, comp["personal_score"], ALPHA=ALPHA)
+        hot_index_val = hot_metrics["volume_score"] + hot_metrics["flow_proxy"] - hot_metrics["volatility"]
+        final_score = compute_final_score(hot_index_val, comp["personal_score"], ALPHA=ALPHA)
 
         row = {
-            "ETF": etf,
-            "類型": etf_type,
-            "θ": theta_val,
-            "final_score": final_score,
-            **comp,
-            "hot_index": hot_index_scalar
+            "ETF":etf,
+            "類型":etf_type,
+            "θ":t,
+            "final_score":final_score,
+            "hot_index":hot_index_val,
+            **comp
         }
         rows.append(row)
-    df_theta = pd.DataFrame(rows).sort_values("final_score", ascending=False)
-    theta_rankings[theta_val] = df_theta
+    df_theta = pd.DataFrame(rows).sort_values("final_score",ascending=False)
+    theta_rankings[t] = df_theta
 
 # ===============================
-# UI / Top-N 展示（以 final_score scalar）
+# UI / Top-N dataframe 根據 Sidebar θ
 # ===============================
-theta_display = 0.5  # UI 上顯示的 θ
 df_ui = theta_rankings[theta_display].head(TOP_N)
-
 st.subheader(f"🎯 Top {TOP_N} ETF 排序（θ={theta_display}, final_score）")
 st.dataframe(df_ui[[
     "ETF","類型","final_score","personal_score",
@@ -187,11 +175,11 @@ st.dataframe(df_ui[[
 ]], use_container_width=True)
 
 # ===============================
-# 雷達圖
+# 雷達圖（隨 theta_display 更新）
 # ===============================
 st.subheader(f"📡 Top {TOP_N} ETF 雷達圖（適配度）")
 metrics = ["sharpe_fit","return_fit","vol_fit","beta_fit"]
-radar = df_ui.melt(id_vars="ETF", value_vars=metrics, var_name="指標", value_name="值")
+radar = df_ui.melt(id_vars="ETF",value_vars=metrics,var_name="指標",value_name="值")
 radar["order"] = radar["指標"].map({m:i for i,m in enumerate(metrics)})
 radar["角度"] = radar["order"]*2*np.pi/len(metrics)
 radar["x"] = radar["值"]*np.cos(radar["角度"])
@@ -207,8 +195,11 @@ area = alt.Chart(radar_closed).mark_area(opacity=0.3).encode(
     tooltip=["ETF","指標","值"]
 )
 line = alt.Chart(radar_closed).mark_line().encode(
-    x="x:Q",y="y:Q",
-    color="ETF:N",detail="ETF:N",order="order:Q"
+    x="x:Q",
+    y="y:Q",
+    color="ETF:N",
+    detail="ETF:N",
+    order="order:Q"
 )
 labels = pd.DataFrame({
     "指標":metrics,
@@ -219,12 +210,12 @@ text = alt.Chart(labels).mark_text(fontSize=12).encode(x="x:Q",y="y:Q",text="指
 st.altair_chart(area+line+text,use_container_width=True)
 
 # ===============================
-# 氣泡圖
+# 氣泡圖（隨 theta_display 更新）
 # ===============================
 st.subheader(f"🫧 Top {TOP_N} ETF 氣泡圖（Sharpe × 個人化分數 × Beta）")
 bubble = alt.Chart(df_ui).mark_circle(opacity=0.7,stroke="black",strokeWidth=0.5).encode(
-    x=alt.X("sharpe_fit:Q", title="Sharpe Ratio"),
-    y=alt.Y("personal_score:Q", title="個人化分數"),
+    x=alt.X("sharpe_fit:Q", title="Sharpe Ratio", scale=alt.Scale(zero=False)),
+    y=alt.Y("personal_score:Q", title="個人化分數", scale=alt.Scale(zero=True)),
     size=alt.Size("beta_fit:Q", title="Beta", scale=alt.Scale(range=[100,1600])),
     color=alt.Color("類型:N", title="ETF 類型"),
     tooltip=["ETF","sharpe_fit","return_fit","vol_fit","beta_fit","personal_score","hot_index","final_score"]
