@@ -9,19 +9,20 @@ Original file is located at
 
 # app.py
 # -*- coding: utf-8 -*-
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
 import altair as alt
 from datetime import datetime, timedelta
-#from scipy.stats import spearmanr
+from scipy.stats import spearmanr
 
 # ===============================
 # 基本設定
 # ===============================
 st.set_page_config(page_title="台灣 ETF 個人化推薦系統", layout="wide")
-st.title("📊 台灣 ETF 個人化 + HotIndex ETF 推薦系統 (僅供參考，不負投資風險)")
+st.title("📊 台灣 ETF 個人化 + HotIndex ETF 推薦系統 (僅供參考，不負投資風險:)")
 
 TRADING_DAYS = 252
 RISK_FREE_RATE = 0.01  # 無風險利率
@@ -49,7 +50,7 @@ horizon = st.sidebar.slider("投資年限（年）", 1, 30, 10, key="horizon_sli
 loss_tol = st.sidebar.slider("可接受最大損失 (%)", 0, 50, 20, key="loss_slider")
 reaction = st.sidebar.radio("市場下跌 20% 時", ["賣出", "觀望", "加碼"], key="reaction_radio")
 
-# 計算 theta
+# 計算 θ
 theta = ((80-age)/60 + horizon/30 + loss_tol/50 + {"賣出":0,"觀望":0.5,"加碼":1}[reaction])/4
 theta = np.clip(theta,0,1)
 st.sidebar.metric("θ（風險偏好指數）", round(theta,2))
@@ -63,7 +64,7 @@ ALPHA = st.sidebar.slider(
 st.sidebar.write(f"HotIndex 權重: {ALPHA:.2f} | 個人化分數權重: {1-ALPHA:.2f}")
 
 # 排序選項
-st.sidebar.header("📊 排序選項")
+st.sidebar.header("📊 排序選擇")
 sort_option = st.sidebar.selectbox(
     "選擇排序依據",
     ["Final Score (HotIndex + 個人化)","風險適配分數（依 θ）"],
@@ -171,7 +172,7 @@ for col in ["volume_score","volatility","flow_proxy"]:
 df_all["hot_index"] = df_all[["volume_score_z","volatility_z","flow_proxy_z"]].sum(axis=1)
 
 # ===============================
-# 個人化分數與 final_score 函數
+# 計算個人化分數 component（θ 驅動）
 # ===============================
 def compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta):
     expected_return = 5 + theta*20
@@ -184,14 +185,14 @@ def compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta):
     beta_fit = np.clip(1 - abs(beta-ideal_beta)/ideal_beta,0,1)
 
     personal_score = np.mean([sharpe_fit, return_fit, vol_fit, beta_fit])
-    components = {
+
+    return {
         "personal_score": personal_score,
         "sharpe_fit": sharpe_fit,
         "return_fit": return_fit,
         "vol_fit": vol_fit,
         "beta_fit": beta_fit
     }
-    return components
 
 def compute_final_score(hot_index, personal_score, ALPHA=0.5):
     return ALPHA*hot_index + (1-ALPHA)*personal_score
@@ -202,50 +203,51 @@ def compute_final_score(hot_index, personal_score, ALPHA=0.5):
 THETA_LIST = [0.0, 0.25, 0.5, 0.75, 1.0]
 theta_rankings = {}
 
-for theta_i in THETA_LIST:
+for t in THETA_LIST:
     rows = []
     for etf, etf_type in ETF_LIST.items():
         df = fetch_price_data(etf)
         if df is None or market_df is None:
             continue
         ann_ret, ann_vol, sharpe, beta = calc_metrics(df, market_df)
-        comp = compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta_i)
+        comp = compute_personalized_score(ann_ret, ann_vol, sharpe, beta, t)
         hot_metrics = compute_hot_index(df)
         final_score = compute_final_score(hot_metrics["volume_score"] + hot_metrics["flow_proxy"] - hot_metrics["volatility"],
                                           comp["personal_score"], ALPHA=ALPHA)
         row = {
             "ETF": etf,
             "類型": etf_type,
-            "θ": theta_i,
+            "θ": t,
             "final_score": final_score,
             **comp,
             "hot_index": hot_metrics["volume_score"] + hot_metrics["flow_proxy"] - hot_metrics["volatility"]
         }
         rows.append(row)
-    df_theta = pd.DataFrame(rows).sort_values("final_score", ascending=False)
-    theta_rankings[theta_i] = df_theta
+    df_theta = pd.DataFrame(rows)
+    df_theta = df_theta.sort_values("final_score", ascending=False)
+    theta_rankings[t] = df_theta
 
 # ===============================
-# Sidebar 選擇 theta_display 控制 Top-N / 圖表
+# Sidebar θ 對應最近鄰 THETA_LIST
 # ===============================
-theta_display = theta  # 使用計算出的 Sidebar theta
-df_ui = theta_rankings[theta_display].head(TOP_N)
+theta_display_closest = min(THETA_LIST, key=lambda x: abs(x - theta))
+df_ui = theta_rankings[theta_display_closest].head(TOP_N)
 
 # ===============================
-# Top-N 表格
+# UI / Top-N 展示
 # ===============================
-st.subheader(f"🎯 Top {TOP_N} ETF 排序（θ={theta_display:.2f}, final_score）")
+st.subheader(f"🎯 Top {TOP_N} ETF 排序（θ={round(theta,2)}, final_score）")
 st.dataframe(df_ui[[
     "ETF","類型","final_score","personal_score",
     "sharpe_fit","return_fit","vol_fit","beta_fit","hot_index"
 ]], use_container_width=True)
 
 # ===============================
-# 雷達圖（依 theta_display）
+# 雷達圖
 # ===============================
-st.subheader(f"📡 Top {TOP_N} ETF 雷達圖（適配度 θ={theta_display:.2f}）")
+st.subheader(f"📡 Top {TOP_N} ETF 雷達圖（θ={round(theta,2)}）")
 metrics = ["sharpe_fit","return_fit","vol_fit","beta_fit"]
-radar = df_ui.melt(id_vars="ETF", value_vars=metrics, var_name="指標", value_name="值")
+radar = df_ui.melt(id_vars="ETF",value_vars=metrics,var_name="指標",value_name="值")
 radar["order"] = radar["指標"].map({m:i for i,m in enumerate(metrics)})
 radar["角度"] = radar["order"]*2*np.pi/len(metrics)
 radar["x"] = radar["值"]*np.cos(radar["角度"])
@@ -276,13 +278,13 @@ text = alt.Chart(labels).mark_text(fontSize=12).encode(x="x:Q",y="y:Q",text="指
 st.altair_chart(area+line+text,use_container_width=True)
 
 # ===============================
-# 氣泡圖（依 theta_display）
+# 氣泡圖
 # ===============================
-st.subheader(f"🫧 Top {TOP_N} ETF 氣泡圖（Sharpe × 個人化分數 × Beta θ={theta_display:.2f}）")
+st.subheader(f"🫧 Top {TOP_N} ETF 氣泡圖（θ={round(theta,2)}）")
 bubble = alt.Chart(df_ui).mark_circle(opacity=0.7,stroke="black",strokeWidth=0.5).encode(
-    x=alt.X("sharpe_fit:Q", title="Sharpe適配"),
+    x=alt.X("sharpe_fit:Q", title="Sharpe 適配"),
     y=alt.Y("personal_score:Q", title="個人化分數"),
-    size=alt.Size("beta_fit:Q", title="Beta適配", scale=alt.Scale(range=[100,1600])),
+    size=alt.Size("beta_fit:Q", title="Beta 適配", scale=alt.Scale(range=[100,1600])),
     color=alt.Color("類型:N", title="ETF 類型"),
     tooltip=["ETF","sharpe_fit","return_fit","vol_fit","beta_fit","personal_score","hot_index","final_score"]
 )
