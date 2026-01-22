@@ -9,22 +9,22 @@ Original file is located at
 
 # app.py
 # -*- coding: utf-8 -*-
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
 import altair as alt
-# from scipy.stats import spearmanr
+from datetime import datetime, timedelta
+from scipy.stats import spearmanr
 
 # ===============================
 # 基本設定
 # ===============================
 st.set_page_config(page_title="台灣 ETF 個人化推薦系統", layout="wide")
-st.title("📊 台灣 ETF 個人化 + HotIndex ETF 推薦系統 (僅供參考，不負投資風險:)")
+st.title("📊 台灣 ETF 個人化 + HotIndex ETF 推薦系統 (僅供參考，不負投資風險)")
 
 TRADING_DAYS = 252
-RISK_FREE_RATE = 0.01  # 無風險利率
+RISK_FREE_RATE = 0.01
 
 # ===============================
 # ETF Universe & 市場基準
@@ -49,30 +49,29 @@ horizon = st.sidebar.slider("投資年限（年）", 1, 30, 10)
 loss_tol = st.sidebar.slider("可接受最大損失 (%)", 0, 50, 20)
 reaction = st.sidebar.radio("市場下跌 20% 時", ["賣出", "觀望", "加碼"])
 
+# theta 計算
 theta = ((80-age)/60 + horizon/30 + loss_tol/50 + {"賣出":0,"觀望":0.5,"加碼":1}[reaction])/4
 theta = np.clip(theta,0,1)
 st.sidebar.metric("θ（風險偏好指數）", round(theta,2))
 
 # HotIndex vs 個人化分數權重
 st.sidebar.header("⚖️ 綜合分數權重")
-ALPHA = st.sidebar.slider("HotIndex 權重（個人化分數權重 = 1 - HotIndex 權重）",
-                          0.0,1.0,0.5,step=0.05)
+ALPHA = st.sidebar.slider("HotIndex 權重（個人化分數權重 = 1 - HotIndex 權重）", 0.0, 1.0, 0.5, step=0.05)
 st.sidebar.write(f"HotIndex 權重: {ALPHA:.2f} | 個人化分數權重: {1-ALPHA:.2f}")
+
+# 排序選項
+st.sidebar.header("📊 排序選項")
+sort_option = st.sidebar.selectbox(
+    "選擇排序依據",
+    ["Final Score (HotIndex + 個人化)","風險適配分數（依 θ）"]
+)
 
 # Top N 顯示
 st.sidebar.header("📈 Top N ETF 顯示")
 TOP_N = st.sidebar.slider("Top N ETF", 1, len(ETF_LIST), 5)
 
-# θ 顯示選擇（支援 Ranking Robustness 展示）
-theta_display = st.sidebar.select_slider("選擇 θ 顯示 Top-N",
-                                         options=[0.0,0.25,0.5,0.75,1.0],
-                                         value=0.5)
-
-# 是否顯示全部 θ 對比
-show_all_theta = st.sidebar.checkbox("顯示全部 θ 對比 Top-N 圖表", value=False)
-
 # ===============================
-# 抓取價格資料（含每日自動刷新）
+# 抓取價格資料
 # ===============================
 @st.cache_data(ttl=86400)
 def fetch_price_data(code, period="1y"):
@@ -105,46 +104,42 @@ def compute_hot_index(df, window=20):
 def robust_zscore(series):
     med = np.median(series)
     mad = np.median(np.abs(series - med))
-    if mad==0: return pd.Series(0,index=series.index)
+    if mad==0:
+        return pd.Series(0,index=series.index)
     return (series - med)/mad
 
 # ===============================
-# 個人化分數 component（θ 驅動）
+# 計算個人化分數 component（θ 驅動）
 # ===============================
 def compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta):
     expected_return = 5 + theta*20
     acceptable_vol = 10 + theta*25
     ideal_beta = 0.7 + theta*0.8
-
     sharpe_fit = min(sharpe/3,1)
     return_fit = np.clip(1 - abs(ann_ret-expected_return)/expected_return,0,1)
     vol_fit = np.clip(1 - ann_vol/acceptable_vol,0,1)
     beta_fit = np.clip(1 - abs(beta-ideal_beta)/ideal_beta,0,1)
-
     personal_score = np.mean([sharpe_fit, return_fit, vol_fit, beta_fit])
-
-    components = {
+    return {
         "personal_score": personal_score,
         "sharpe_fit": sharpe_fit,
         "return_fit": return_fit,
         "vol_fit": vol_fit,
         "beta_fit": beta_fit
     }
-    return components
 
-# ===============================
-# final_score 計算
-# ===============================
 def compute_final_score(hot_index, personal_score, ALPHA=0.5):
     return ALPHA*hot_index + (1-ALPHA)*personal_score
 
 # ===============================
-# 市場資料 & theta_rankings
+# 主流程：計算 ETF 分數 + 支援不同 θ
 # ===============================
 market_df = fetch_price_data(MARKET_BENCHMARK)
 theta_rankings = {}
 
-for t in [0.0,0.25,0.5,0.75,1.0]:
+THETA_LIST = [0.0, 0.25, 0.5, 0.75, 1.0]
+
+for t in THETA_LIST:
     rows = []
     for etf, etf_type in ETF_LIST.items():
         df = fetch_price_data(etf)
@@ -154,132 +149,60 @@ for t in [0.0,0.25,0.5,0.75,1.0]:
         comp = compute_personalized_score(ann_ret, ann_vol, sharpe, beta, t)
         hot_metrics = compute_hot_index(df)
         hot_index_val = hot_metrics["volume_score"] + hot_metrics["flow_proxy"] - hot_metrics["volatility"]
-        final_score = compute_final_score(hot_index_val, comp["personal_score"], ALPHA=ALPHA)
-
+        final_score_val = compute_final_score(hot_index_val, comp["personal_score"], ALPHA)
         row = {
-            "ETF":etf,
-            "類型":etf_type,
-            "θ":t,
-            "final_score":final_score,
-            "hot_index":hot_index_val,
-            **comp
+            "ETF": etf,
+            "類型": etf_type,
+            "θ": t,
+            "final_score": final_score_val,
+            **comp,
+            "hot_index": hot_index_val
         }
         rows.append(row)
-    df_theta = pd.DataFrame(rows).sort_values("final_score",ascending=False)
+    df_theta = pd.DataFrame(rows).sort_values("final_score", ascending=False)
     theta_rankings[t] = df_theta
 
 # ===============================
-# UI / Top-N dataframe 根據 Sidebar θ
+# Top-N & UI 用 df
 # ===============================
-df_ui = theta_rankings[theta_display].head(TOP_N)
-st.subheader(f"🎯 Top {TOP_N} ETF 排序（θ={theta_display}, final_score）")
+df_ui = theta_rankings[theta].head(TOP_N)  # 根據 Sidebar theta 即時更新
+
+st.subheader(f"🎯 Top {TOP_N} ETF 排序（θ={theta:.2f}, final_score）")
 st.dataframe(df_ui[[
     "ETF","類型","final_score","personal_score",
     "sharpe_fit","return_fit","vol_fit","beta_fit","hot_index"
 ]], use_container_width=True)
 
 # ===============================
-# 雷達圖（單一 θ）
+# 雷達圖（Top-N）隨 θ 更新
 # ===============================
-st.subheader(f"📡 Top {TOP_N} ETF 雷達圖（適配度 θ={theta_display}）")
+st.subheader(f"📡 Top {TOP_N} ETF 雷達圖（適配度）")
 metrics = ["sharpe_fit","return_fit","vol_fit","beta_fit"]
-radar = df_ui.melt(id_vars="ETF",value_vars=metrics,var_name="指標",value_name="值")
+radar = df_ui.melt(id_vars="ETF", value_vars=metrics, var_name="指標", value_name="值")
 radar["order"] = radar["指標"].map({m:i for i,m in enumerate(metrics)})
 radar["角度"] = radar["order"]*2*np.pi/len(metrics)
 radar["x"] = radar["值"]*np.cos(radar["角度"])
 radar["y"] = radar["值"]*np.sin(radar["角度"])
-radar_closed = pd.concat([radar, radar.groupby("ETF").apply(lambda d:d.iloc[[0]]).reset_index(drop=True)],ignore_index=True)
+radar_closed = pd.concat([radar, radar.groupby("ETF").apply(lambda d:d.iloc[[0]]).reset_index(drop=True)], ignore_index=True)
 
 area = alt.Chart(radar_closed).mark_area(opacity=0.3).encode(
-    x=alt.X("x:Q",axis=None),
-    y=alt.Y("y:Q",axis=None),
-    color="ETF:N",
-    detail="ETF:N",
-    order="order:Q",
+    x="x:Q", y="y:Q", color="ETF:N", detail="ETF:N",
     tooltip=["ETF","指標","值"]
 )
 line = alt.Chart(radar_closed).mark_line().encode(
-    x="x:Q",
-    y="y:Q",
-    color="ETF:N",
-    detail="ETF:N",
-    order="order:Q"
+    x="x:Q", y="y:Q", color="ETF:N", detail="ETF:N"
 )
-labels = pd.DataFrame({
-    "指標":metrics,
-    "x":[1.2*np.cos(i*2*np.pi/len(metrics)) for i in range(len(metrics))],
-    "y":[1.2*np.sin(i*2*np.pi/len(metrics)) for i in range(len(metrics))]
-})
-text = alt.Chart(labels).mark_text(fontSize=12).encode(x="x:Q",y="y:Q",text="指標:N")
-st.altair_chart(area+line+text,use_container_width=True)
+st.altair_chart(area+line, use_container_width=True)
 
 # ===============================
-# 氣泡圖（單一 θ）
+# 氣泡圖（Top-N）隨 θ 更新
 # ===============================
-st.subheader(f"🫧 Top {TOP_N} ETF 氣泡圖（Sharpe × 個人化分數 × Beta θ={theta_display}）")
-bubble = alt.Chart(df_ui).mark_circle(opacity=0.7,stroke="black",strokeWidth=0.5).encode(
-    x=alt.X("sharpe_fit:Q", title="Sharpe Ratio", scale=alt.Scale(zero=False)),
-    y=alt.Y("personal_score:Q", title="個人化分數", scale=alt.Scale(zero=True)),
-    size=alt.Size("beta_fit:Q", title="Beta", scale=alt.Scale(range=[100,1600])),
+st.subheader(f"🫧 Top {TOP_N} ETF 氣泡圖（Sharpe × 個人化分數 × Beta）")
+bubble = alt.Chart(df_ui).mark_circle(opacity=0.7, stroke="black", strokeWidth=0.5).encode(
+    x=alt.X("sharpe_fit:Q", title="Sharpe 適配度"),
+    y=alt.Y("personal_score:Q", title="個人化分數"),
+    size=alt.Size("beta_fit:Q", title="Beta 適配度", scale=alt.Scale(range=[100,1600])),
     color=alt.Color("類型:N", title="ETF 類型"),
     tooltip=["ETF","sharpe_fit","return_fit","vol_fit","beta_fit","personal_score","hot_index","final_score"]
 )
 st.altair_chart(bubble,use_container_width=True)
-
-# ===============================
-# 全部 θ 對比 Top-N
-# ===============================
-if show_all_theta:
-    st.subheader(f"📊 全部 θ 對比 Top-{TOP_N}")
-    all_rows = []
-    for t in [0.0,0.25,0.5,0.75,1.0]:
-        df_t = theta_rankings[t].head(TOP_N).copy()
-        df_t["θ"] = t
-        all_rows.append(df_t)
-    df_all_theta = pd.concat(all_rows,ignore_index=True)
-
-    # 雷達圖對比
-    radar_all = df_all_theta.melt(id_vars=["ETF","θ"],value_vars=metrics,var_name="指標",value_name="值")
-    radar_all["order"] = radar_all["指標"].map({m:i for i,m in enumerate(metrics)})
-    radar_all["角度"] = radar_all["order"]*2*np.pi/len(metrics)
-    radar_all["x"] = radar_all["值"]*np.cos(radar_all["角度"])
-    radar_all["y"] = radar_all["值"]*np.sin(radar_all["角度"])
-    radar_all_closed = pd.concat([radar_all, radar_all.groupby(["ETF","θ"]).apply(lambda d:d.iloc[[0]]).reset_index(drop=True)],ignore_index=True)
-
-    area_all = alt.Chart(radar_all_closed).mark_area(opacity=0.2).encode(
-        x="x:Q",
-        y="y:Q",
-        color="ETF:N",
-        detail="ETF:N",
-        tooltip=["ETF","θ","指標","值"]
-    )
-    line_all = alt.Chart(radar_all_closed).mark_line().encode(
-        x="x:Q",
-        y="y:Q",
-        color="ETF:N",
-        detail="ETF:N",
-        tooltip=["ETF","θ","指標","值"]
-    )
-    st.altair_chart(area_all+line_all,use_container_width=True)
-
-    # 氣泡圖對比
-    st.subheader(f"🫧 全部 θ 氣泡圖（Sharpe × 個人化分數 × Beta）")
-    bubble_all = alt.Chart(df_all_theta).mark_circle(opacity=0.6,stroke="black",strokeWidth=0.5).encode(
-        x=alt.X("sharpe_fit:Q", title="Sharpe Ratio"),
-        y=alt.Y("personal_score:Q", title="個人化分數"),
-        size=alt.Size("beta_fit:Q", title="Beta", scale=alt.Scale(range=[100,1600])),
-        color=alt.Color("θ:O", title="θ 值"),
-        tooltip=["ETF","θ","sharpe_fit","return_fit","vol_fit","beta_fit","personal_score","hot_index","final_score"]
-    )
-    st.altair_chart(bubble_all,use_container_width=True)
-
-    # Spearman correlation / Top-N overlap 可以在這裡額外計算並顯示
-    # st.subheader("🔗 Top-N Spearman 相關性表")
-    # spearman_matrix = pd.DataFrame(index=[0.0,0.25,0.5,0.75,1.0], columns=[0.0,0.25,0.5,0.75,1.0])
-    # for t1 in [0.0,0.25,0.5,0.75,1.0]:
-    #     for t2 in [0.0,0.25,0.5,0.75,1.0]:
-    #         df1 = theta_rankings[t1].head(TOP_N)
-    #         df2 = theta_rankings[t2].head(TOP_N)
-    #         merged = pd.merge(df1[["ETF","final_score"]], df2[["ETF","final_score"]], on="ETF", how="outer", suffixes=("_1","_2")).fillna(0)
-    #         spearman_matrix.loc[t1,t2] = round(spearmanr(merged["final_score_1"], merged["final_score_2"]).correlation,2)
-    # st.dataframe(spearman_matrix)
