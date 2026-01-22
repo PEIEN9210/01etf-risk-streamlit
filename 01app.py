@@ -103,6 +103,9 @@ def compute_hot_index(df, window=20):
     flow_proxy = (df["Close"]*df["Volume"]).rolling(window).mean().iloc[-1]
     return {"volume_score":volume_ma, "volatility":volatility, "flow_proxy":flow_proxy}
 
+# ===============================
+# Robust Z-score
+# ===============================
 def robust_zscore(series):
     med = np.median(series)
     mad = np.median(np.abs(series - med))
@@ -111,7 +114,7 @@ def robust_zscore(series):
     return (series - med)/mad
 
 # ===============================
-# 計算個人化 component
+# 計算個人化分數 component（θ 驅動）
 # ===============================
 def compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta):
     expected_return = 5 + theta*20
@@ -124,20 +127,27 @@ def compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta):
     beta_fit = np.clip(1 - abs(beta-ideal_beta)/ideal_beta,0,1)
 
     personal_score = np.mean([sharpe_fit, return_fit, vol_fit, beta_fit])
-    return {"personal_score": personal_score, "sharpe_fit":sharpe_fit,
-            "return_fit":return_fit,"vol_fit":vol_fit,"beta_fit":beta_fit}
+
+    components = {
+        "personal_score": personal_score,
+        "sharpe_fit": sharpe_fit,
+        "return_fit": return_fit,
+        "vol_fit": vol_fit,
+        "beta_fit": beta_fit
+    }
+    return components
 
 # ===============================
-# 計算 final_score
+# 計算 final_score（UI / Top-N 用）
 # ===============================
 def compute_final_score(hot_index, personal_score, ALPHA=0.5):
     return ALPHA*hot_index + (1-ALPHA)*personal_score
 
 # ===============================
-# 主流程：計算 theta_rankings
+# 主流程：支援不同 θ 的個人化排序（方法一 Ranking Robustness）
 # ===============================
 market_df = fetch_price_data(MARKET_BENCHMARK)
-THETA_LIST = [0.0,0.25,0.5,0.75,1.0]
+THETA_LIST = [0.0, 0.25, 0.5, 0.75, 1.0]
 theta_rankings = {}
 
 for theta_val in THETA_LIST:
@@ -152,22 +162,26 @@ for theta_val in THETA_LIST:
         hot_index_scalar = hot_metrics["volume_score"] + hot_metrics["flow_proxy"] - hot_metrics["volatility"]
         final_score = compute_final_score(hot_index_scalar, comp["personal_score"], ALPHA=ALPHA)
 
-        row = {"ETF":etf,"類型":etf_type,"θ":theta_val,
-               "final_score":final_score,"hot_index":hot_index_scalar,
-               **comp}
+        row = {
+            "ETF": etf,
+            "類型": etf_type,
+            "θ": theta_val,
+            "final_score": final_score,
+            **comp,
+            "hot_index": hot_index_scalar
+        }
         rows.append(row)
-
-    df_theta = pd.DataFrame(rows).sort_values("final_score",ascending=False)
+    df_theta = pd.DataFrame(rows).sort_values("final_score", ascending=False)
     theta_rankings[theta_val] = df_theta
 
 # ===============================
-# UI Top-N 展示
+# UI / Top-N 展示（以 final_score scalar）
 # ===============================
-theta_display = 0.5
-df_all_top = theta_rankings[theta_display].head(TOP_N)
+theta_display = 0.5  # UI 上顯示的 θ
+df_ui = theta_rankings[theta_display].head(TOP_N)
 
 st.subheader(f"🎯 Top {TOP_N} ETF 排序（θ={theta_display}, final_score）")
-st.dataframe(df_all_top[[
+st.dataframe(df_ui[[
     "ETF","類型","final_score","personal_score",
     "sharpe_fit","return_fit","vol_fit","beta_fit","hot_index"
 ]], use_container_width=True)
@@ -177,7 +191,7 @@ st.dataframe(df_all_top[[
 # ===============================
 st.subheader(f"📡 Top {TOP_N} ETF 雷達圖（適配度）")
 metrics = ["sharpe_fit","return_fit","vol_fit","beta_fit"]
-radar = df_all_top.melt(id_vars="ETF", value_vars=metrics, var_name="指標", value_name="值")
+radar = df_ui.melt(id_vars="ETF", value_vars=metrics, var_name="指標", value_name="值")
 radar["order"] = radar["指標"].map({m:i for i,m in enumerate(metrics)})
 radar["角度"] = radar["order"]*2*np.pi/len(metrics)
 radar["x"] = radar["值"]*np.cos(radar["角度"])
@@ -208,8 +222,8 @@ st.altair_chart(area+line+text,use_container_width=True)
 # 氣泡圖
 # ===============================
 st.subheader(f"🫧 Top {TOP_N} ETF 氣泡圖（Sharpe × 個人化分數 × Beta）")
-bubble = alt.Chart(df_all_top).mark_circle(opacity=0.7,stroke="black",strokeWidth=0.5).encode(
-    x=alt.X("sharpe_fit:Q", title="Sharpe Ratio", scale=alt.Scale(zero=False)),
+bubble = alt.Chart(df_ui).mark_circle(opacity=0.7,stroke="black",strokeWidth=0.5).encode(
+    x=alt.X("sharpe_fit:Q", title="Sharpe Ratio"),
     y=alt.Y("personal_score:Q", title="個人化分數"),
     size=alt.Size("beta_fit:Q", title="Beta", scale=alt.Scale(range=[100,1600])),
     color=alt.Color("類型:N", title="ETF 類型"),
