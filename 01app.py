@@ -274,12 +274,12 @@ if show_all_theta:
     st.altair_chart(bubble_all,use_container_width=True)
 
     # Spearman correlation / Top-N overlap 可以在這裡額外計算並顯示
-    st.subheader("🔗 Top-N Spearman 相關性表")
-    spearman_matrix = pd.DataFrame(index=[0.0,0.25,0.5,0.75,1.0], columns=[0.0,0.25,0.5,0.75,1.0])
-    for t1 in [0.0,0.25,0.5,0.75,1.0]:
-        for t2 in [0.0,0.25,0.5,0.75,1.0]:
-            df1 = theta_rankings[t1].head(TOP_N)
-            df2 = theta_rankings[t2].head(TOP_N)
-            merged = pd.merge(df1[["ETF","final_score"]], df2[["ETF","final_score"]], on="ETF", how="outer", suffixes=("_1","_2")).fillna(0)
-            spearman_matrix.loc[t1,t2] = round(spearmanr(merged["final_score_1"], merged["final_score_2"]).correlation,2)
-    st.dataframe(spearman_matrix)
+    # st.subheader("🔗 Top-N Spearman 相關性表")
+    # spearman_matrix = pd.DataFrame(index=[0.0,0.25,0.5,0.75,1.0], columns=[0.0,0.25,0.5,0.75,1.0])
+    # for t1 in [0.0,0.25,0.5,0.75,1.0]:
+    #     for t2 in [0.0,0.25,0.5,0.75,1.0]:
+    #         df1 = theta_rankings[t1].head(TOP_N)
+    #         df2 = theta_rankings[t2].head(TOP_N)
+    #         merged = pd.merge(df1[["ETF","final_score"]], df2[["ETF","final_score"]], on="ETF", how="outer", suffixes=("_1","_2")).fillna(0)
+    #         spearman_matrix.loc[t1,t2] = round(spearmanr(merged["final_score_1"], merged["final_score_2"]).correlation,2)
+    # st.dataframe(spearman_matrix)
