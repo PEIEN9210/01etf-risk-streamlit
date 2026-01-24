@@ -16,7 +16,7 @@ import numpy as np
 import yfinance as yf
 import altair as alt
 from datetime import datetime, timedelta
-from scipy.stats import spearmanr
+#from scipy.stats import spearmanr
 
 # ===============================
 # 基本設定
