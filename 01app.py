@@ -194,15 +194,25 @@ st.dataframe(df_ui, use_container_width=True)
 # ===============================
 # Ranking Robustness（Spearman）
 # ===============================
-base = theta_rankings[0.5]["ETF"]
+base_rank = theta_rankings[0.5][["ETF"]].reset_index()
+base_rank["rank_base"] = base_rank.index
 
 rank_corr = {}
+
 for t, df_t in theta_rankings.items():
-    aligned = df_t.set_index("ETF").loc[base].reset_index()
-    corr, _ = spearmanr(range(len(aligned)), aligned.index)
-    rank_corr[t] = round(corr, 3)
+    df_rank = df_t[["ETF"]].reset_index()
+    df_rank["rank_t"] = df_rank.index
+
+    merged = base_rank.merge(df_rank, on="ETF", how="inner")
+
+    if len(merged) > 1:
+        corr, _ = spearmanr(merged["rank_base"], merged["rank_t"])
+        rank_corr[t] = round(corr, 3)
+    else:
+        rank_corr[t] = np.nan
 
 st.caption(f"📐 排序穩定性（Spearman vs θ=0.5）：{rank_corr}")
+
 
 # ===============================
 # 雷達圖
