@@ -1,15 +1,11 @@
-# Streamlit web app
-streamlit>=1.25.0
-
-# 資料處理
-pandas>=2.0
-numpy>=1.25
-
-# 金融資料抓取
-yfinance>=0.2.30
-
-# 視覺化
-altair>=5.0
-
-# 統計計算
-scipy>=1.11
+streamlit
+pandas
+numpy
+yfinance
+requests
+beautifulsoup4
+lxml
+plotly
+streamlit
+altair
+scipy
