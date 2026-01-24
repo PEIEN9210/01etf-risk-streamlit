@@ -1,4 +1,3 @@
-streamlit
 pandas
 numpy
 yfinance
@@ -9,3 +8,4 @@ plotly
 streamlit
 altair
 scipy
+
