@@ -171,6 +171,18 @@ for col in ["volume_score","volatility","flow_proxy"]:
     df_all[col+"_z"] = robust_zscore(df_all[col])
 df_all["hot_index"] = df_all[["volume_score_z","volatility_z","flow_proxy_z"]].sum(axis=1)
 
+# === HotIndex 正規化===
+hot_min = df_all["hot_index"].min()
+hot_max = df_all["hot_index"].max()
+
+if hot_max - hot_min == 0:
+    df_all["hot_index_norm"] = 0.5
+else:
+    df_all["hot_index_norm"] = (
+        df_all["hot_index"] - hot_min
+    ) / (hot_max - hot_min)
+
+
 # ===============================
 # 計算個人化分數 component（θ 驅動）
 # ===============================
