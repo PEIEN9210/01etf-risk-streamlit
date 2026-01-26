@@ -206,8 +206,9 @@ def compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta):
         "beta_fit": beta_fit
     }
 
-def compute_final_score(hot_index, personal_score, ALPHA=0.5):
-    return ALPHA*hot_index + (1-ALPHA)*personal_score
+def compute_final_score(hot_index_norm, personal_score, ALPHA):
+    return ALPHA*hot_index_norm + (1-ALPHA)*personal_score
+
 
 # ===============================
 # 支援不同 θ 的個人化排序（方法一 Ranking Robustness）
