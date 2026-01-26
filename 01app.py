@@ -58,7 +58,7 @@ st.sidebar.metric("θ（風險偏好指數）", round(theta,2))
 # HotIndex vs 個人化分數權重
 st.sidebar.header("⚖️ 綜合分數權重")
 # 使用者手動 α（只用於對照）
-ALPHA_UI = st.sidebar.slider(
+ALPHA = st.sidebar.slider(
     "HotIndex 權重（僅供對照）",
     0.0, 1.0, 0.5, step=0.05, key="alpha_slider"
 )
