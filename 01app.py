@@ -229,8 +229,8 @@ for t in THETA_LIST:
         ann_ret, ann_vol, sharpe, beta = calc_metrics(df, market_df)
         comp = compute_personalized_score(ann_ret, ann_vol, sharpe, beta, t)
         hot_metrics = compute_hot_index(df)
-        final_score = compute_final_score(hot_metrics["volume_score"] + hot_metrics["flow_proxy"] - hot_metrics["volatility"],
-                                          comp["personal_score"], ALPHA=ALPHA)
+        final_score = compute_final_score( df_all.loc[df_all["ETF"] == etf, "hot_index_norm"].values[0], comp["personal_score"], ALPHA=ALPHA_theta)
+
         row = {
             "ETF": etf,
             "類型": etf_type,
