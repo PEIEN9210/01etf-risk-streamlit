@@ -88,25 +88,17 @@ def fetch_price_data(code, period="1y"):
 # ===============================
 # 指標計算
 # ===============================
-def safe_spearman(x, y):
-    # index 對齊
-    idx = x.index.intersection(y.index)
-    x, y = x.loc[idx], y.loc[idx]
-    if len(x) < 2 or len(y) < 2:
-        return np.nan
-    if np.all(x == x.iloc[0]) or np.all(y == y.iloc[0]):
-        return np.nan
-    coef, _ = spearmanr(x, y)
-    return coef
-
 def calc_metrics(df, market_df):
     r = df["Close"].pct_change().dropna()
     mr = market_df["Close"].pct_change().dropna()
-    
+    idx = r.index.intersection(mr.index)
+    r, mr = r.loc[idx], mr.loc[idx]
+
     ann_ret = r.mean() * TRADING_DAYS
     ann_vol = r.std() * np.sqrt(TRADING_DAYS)
-    beta = safe_spearman(r, mr)  # Spearman 防呆
-    return ann_ret*100, ann_vol*100, beta
+    sharpe = (ann_ret - RISK_FREE_RATE)/ann_vol if ann_vol>0 else 0
+    beta = np.cov(r,mr)[0,1]/np.var(mr)
+    return ann_ret*100, ann_vol*100, sharpe, beta
 
 def compute_hot_index(df, window=20):
     volume_ma = df["Volume"].rolling(window).mean().iloc[-1]
@@ -133,18 +125,22 @@ for etf, etf_type in ETF_LIST.items():
     if df is None or market_df is None:
         continue
 
-    ann_ret, ann_vol, beta = calc_metrics(df, market_df)
+    ann_ret, ann_vol, sharpe, beta = calc_metrics(df, market_df)
 
     # 個人化適配
     expected_return = 5 + theta*20
     acceptable_vol = 10 + theta*25
     ideal_beta = 0.7 + theta*0.8
 
+    sharpe_fit = min(sharpe/3,1)
     return_fit = np.clip(1 - abs(ann_ret-expected_return)/expected_return,0,1)
     vol_fit = np.clip(1 - ann_vol/acceptable_vol,0,1)
     beta_fit = np.clip(1 - abs(beta-ideal_beta)/ideal_beta,0,1)
 
-    personal_score = np.mean([return_fit, vol_fit, beta_fit])
+    # 風險適配分數（加權）
+    risk_score = vol_fit*0.4 + beta_fit*0.3 + return_fit*0.2 + sharpe_fit*0.1
+
+    personal_score = np.mean([sharpe_fit, return_fit, vol_fit, beta_fit])
 
     # HotIndex
     hot_metrics = compute_hot_index(df)
@@ -152,13 +148,19 @@ for etf, etf_type in ETF_LIST.items():
         "ETF":etf,
         "類型":etf_type,
         "最新價":round(df["Close"].iloc[-1],2),
-        "Beta":round(beta,2) if beta is not np.nan else None,
+        "Sharpe":round(sharpe,2),
+        "Beta":round(beta,2),
         "年化報酬%":round(ann_ret,2),
         "年化波動%":round(ann_vol,2),
         "個人化分數":round(personal_score,3),
+        "風險適配分數":round(risk_score,3),
         "volume_score":hot_metrics["volume_score"],
         "volatility":hot_metrics["volatility"],
-        "flow_proxy":hot_metrics["flow_proxy"]
+        "flow_proxy":hot_metrics["flow_proxy"],
+        "Sharpe適配":round(sharpe_fit,2),
+        "報酬適配":round(return_fit,2),
+        "波動適配":round(vol_fit,2),
+        "Beta適配":round(beta_fit,2)
     }
     rows.append(row)
 
@@ -172,23 +174,31 @@ df_all["hot_index"] = df_all[["volume_score_z","volatility_z","flow_proxy_z"]].s
 # ===============================
 # 計算個人化分數 component（θ 驅動）
 # ===============================
-def compute_personalized_score(ann_ret, ann_vol, beta, theta):
+def compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta):
     expected_return = 5 + theta*20
     acceptable_vol = 10 + theta*25
     ideal_beta = 0.7 + theta*0.8
 
+    sharpe_fit = min(sharpe/3,1)
     return_fit = np.clip(1 - abs(ann_ret-expected_return)/expected_return,0,1)
     vol_fit = np.clip(1 - ann_vol/acceptable_vol,0,1)
     beta_fit = np.clip(1 - abs(beta-ideal_beta)/ideal_beta,0,1)
 
-    personal_score = np.mean([return_fit, vol_fit, beta_fit])
-    return {"personal_score": personal_score, "return_fit": return_fit, "vol_fit": vol_fit, "beta_fit": beta_fit}
+    personal_score = np.mean([sharpe_fit, return_fit, vol_fit, beta_fit])
+
+    return {
+        "personal_score": personal_score,
+        "sharpe_fit": sharpe_fit,
+        "return_fit": return_fit,
+        "vol_fit": vol_fit,
+        "beta_fit": beta_fit
+    }
 
 def compute_final_score(hot_index, personal_score, ALPHA=0.5):
     return ALPHA*hot_index + (1-ALPHA)*personal_score
 
 # ===============================
-# 支援不同 θ 的個人化排序（Ranking Robustness）
+# 支援不同 θ 的個人化排序（方法一 Ranking Robustness）
 # ===============================
 THETA_LIST = [0.0, 0.25, 0.5, 0.75, 1.0]
 theta_rankings = {}
@@ -199,8 +209,8 @@ for t in THETA_LIST:
         df = fetch_price_data(etf)
         if df is None or market_df is None:
             continue
-        ann_ret, ann_vol, beta = calc_metrics(df, market_df)
-        comp = compute_personalized_score(ann_ret, ann_vol, beta, t)
+        ann_ret, ann_vol, sharpe, beta = calc_metrics(df, market_df)
+        comp = compute_personalized_score(ann_ret, ann_vol, sharpe, beta, t)
         hot_metrics = compute_hot_index(df)
         final_score = compute_final_score(hot_metrics["volume_score"] + hot_metrics["flow_proxy"] - hot_metrics["volatility"],
                                           comp["personal_score"], ALPHA=ALPHA)
@@ -229,14 +239,14 @@ df_ui = theta_rankings[theta_display_closest].head(TOP_N)
 st.subheader(f"🎯 Top {TOP_N} ETF 排序（θ={round(theta,2)}, final_score）")
 st.dataframe(df_ui[[
     "ETF","類型","final_score","personal_score",
-    "return_fit","vol_fit","beta_fit","hot_index"
+    "sharpe_fit","return_fit","vol_fit","beta_fit","hot_index"
 ]], use_container_width=True)
 
 # ===============================
 # 雷達圖
 # ===============================
 st.subheader(f"📡 Top {TOP_N} ETF 雷達圖（θ={round(theta,2)}）")
-metrics = ["return_fit","vol_fit","beta_fit"]
+metrics = ["sharpe_fit","return_fit","vol_fit","beta_fit"]
 radar = df_ui.melt(id_vars="ETF",value_vars=metrics,var_name="指標",value_name="值")
 radar["order"] = radar["指標"].map({m:i for i,m in enumerate(metrics)})
 radar["角度"] = radar["order"]*2*np.pi/len(metrics)
@@ -270,12 +280,12 @@ st.altair_chart(area+line+text,use_container_width=True)
 # ===============================
 # 氣泡圖
 # ===============================
-st.subheader(f"🫧 Top {TOP_N} ETF 氣泡圖（θ={round(theta,2)}）")
+st.subheader(f"💭 Top {TOP_N} ETF 氣泡圖（θ={round(theta,2)}）")
 bubble = alt.Chart(df_ui).mark_circle(opacity=0.7,stroke="black",strokeWidth=0.5).encode(
-    x=alt.X("return_fit:Q", title="報酬適配"),
+    x=alt.X("sharpe_fit:Q", title="Sharpe 適配"),
     y=alt.Y("personal_score:Q", title="個人化分數"),
     size=alt.Size("beta_fit:Q", title="Beta 適配", scale=alt.Scale(range=[100,1600])),
     color=alt.Color("類型:N", title="ETF 類型"),
-    tooltip=["ETF","return_fit","vol_fit","beta_fit","personal_score","hot_index","final_score"]
+    tooltip=["ETF","sharpe_fit","return_fit","vol_fit","beta_fit","personal_score","hot_index","final_score"]
 )
 st.altair_chart(bubble,use_container_width=True)
