@@ -208,8 +208,9 @@ def compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta):
         "beta_fit": beta_fit
     }
 
-def compute_final_score(hot_index_norm, personal_score, ALPHA=ALPHA_MODEL):
-    return ALPHA*hot_index_norm + (1-ALPHA)*personal_score
+def compute_final_score(hot_index_norm, personal_score, alpha):
+    return alpha*hot_index_norm + (1-alpha)*personal_score
+
 
 # === α 由 θ 內生決定（行為財務修正）===
 def alpha_from_theta(theta, alpha_min=0.1, alpha_max=0.7):
