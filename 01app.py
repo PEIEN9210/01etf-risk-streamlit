@@ -22,7 +22,7 @@ from scipy.stats import spearmanr
 # 基本設定
 # ===============================
 st.set_page_config(page_title="台灣 ETF 個人化推薦系統", layout="wide")
-st.title("📊 台灣 ETF 個人化 + HotIndex ETF 推薦系統 (僅供參考，不負投資風險:)")
+st.title("📊 台灣 ETF 多準則資產排序框架 (僅供參考，不負投資風險:)")
 
 TRADING_DAYS = 252
 RISK_FREE_RATE = 0.01  # 無風險利率
