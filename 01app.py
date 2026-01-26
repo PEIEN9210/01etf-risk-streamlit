@@ -209,6 +209,10 @@ def compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta):
 def compute_final_score(hot_index_norm, personal_score, ALPHA):
     return ALPHA*hot_index_norm + (1-ALPHA)*personal_score
 
+# === α 由 θ 內生決定（行為財務修正）===
+def alpha_from_theta(theta, alpha_min=0.1, alpha_max=0.7):
+    return alpha_min + (alpha_max - alpha_min)*theta
+ALPHA_theta = alpha_from_theta(theta)
 
 # ===============================
 # 支援不同 θ 的個人化排序（方法一 Ranking Robustness）
