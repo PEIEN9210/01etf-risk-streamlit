@@ -95,6 +95,21 @@ def fetch_price_data(code, period="1y"):
         return None
     return df
 
+@st.cache_data(ttl=86400)
+def fetch_all_price_data(etf_list, benchmark, period="1y"):
+    data = {}
+    tickers = list(etf_list.keys()) + [benchmark]
+
+    for code in set(tickers):
+        try:
+            df = yf.Ticker(code).history(period=period)
+            if not df.empty and len(df) >= 50:
+                data[code] = df
+        except Exception as e:
+            data[code] = None
+    return data
+
+
 # ===============================
 # 指標計算
 # ===============================
@@ -127,11 +142,13 @@ def robust_zscore(series):
 # ===============================
 # 主流程：計算 ETF 分數
 # ===============================
-market_df = fetch_price_data(MARKET_BENCHMARK)
+price_data = fetch_all_price_data(ETF_LIST, MARKET_BENCHMARK)
+market_df = price_data.get(MARKET_BENCHMARK)
+
 rows = []
 
 for etf, etf_type in ETF_LIST.items():
-    df = fetch_price_data(etf)
+    df = price_data.get(etf)
     if df is None or market_df is None:
         continue
 
@@ -221,7 +238,7 @@ theta_rankings = {}
 for t in THETA_LIST:
     rows = []
     for etf, etf_type in ETF_LIST.items():
-        df = fetch_price_data(etf)
+        df = price_data.get(etf)
         if df is None or market_df is None:
             continue
 
