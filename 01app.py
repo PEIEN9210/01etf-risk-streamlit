@@ -337,8 +337,19 @@ df_ui = theta_rankings[theta_display_closest].head(TOP_N)
 st.subheader(f"🎯 Top {TOP_N} ETF 排序（θ={round(theta, 2)}, final_score）")
 st.dataframe(
     df_ui[[
-        "ETF", "類型", "final_score", "personal_score",
-        "sharpe_fit", "return_fit", "vol_fit", "beta_fit", "hot_index"
+        "ETF", "類型",
+        "最新價",
+        "最新配息日",
+        "最近一次配息",
+        "TTM配息",
+        "TTM殖利率%",
+        "final_score",
+        "personal_score",
+        "sharpe_fit",
+        "return_fit",
+        "vol_fit",
+        "beta_fit",
+        "hot_index"
     ]],
     use_container_width=True
 )
