@@ -306,6 +306,23 @@ for etf, etf_type in ETF_LIST.items():
     }
 
     rows.append(row)
+    # ===============================
+# 建立 df_all（HotIndex 正規化母表）
+# ===============================
+df_all = pd.DataFrame(rows)
+
+# HotIndex 原始值
+df_all["hot_index"] = (
+    df_all["volume_score"]
+    + df_all["flow_proxy"]
+    - df_all["volatility"]
+)
+
+# Robust Z-score 正規化（避免極端值）
+df_all["hot_index_norm"] = robust_zscore(df_all["hot_index"])
+
+# 缺失保護
+df_all["hot_index_norm"] = df_all["hot_index_norm"].fillna(0)
 # ===============================
 # 計算個人化分數 component（θ 驅動）
 # ===============================
