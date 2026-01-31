@@ -373,13 +373,20 @@ for t in THETA_LIST:
             alpha=ALPHA_MODEL
         )
 
-        row = {
-            "ETF": etf,
-            "類型": etf_type,
-            "θ": t,
-            "final_score": final_score,
-            **comp,
-            "hot_index": hot_metrics["volume_score"] + hot_metrics["flow_proxy"] - hot_metrics["volatility"]
+       base_row = df_all[df_all["ETF"] == etf].iloc[0]
+
+     row = {
+         "ETF": etf,
+        "類型": etf_type,
+        "θ": t,
+        "最新價": base_row["最新價"],
+        "最新配息日": base_row["最新配息日"],
+        "最近一次配息": base_row["最近一次配息"],
+        "TTM配息": base_row["TTM配息"],
+        "TTM殖利率%": base_row["TTM殖利率%"],
+        "final_score": final_score,
+        **comp,
+        "hot_index": base_row["hot_index"]
         }
         rows.append(row)
 
