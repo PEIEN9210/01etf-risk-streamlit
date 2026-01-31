@@ -246,21 +246,66 @@ row = {
     "波動適配": round(vol_fit, 2),
     "Beta適配": round(beta_fit, 2)
 }
+rows = []
+
+for etf, etf_type in ETF_LIST.items():
+    df = price_data.get(etf)
+    if df is None or market_df is None:
+        continue
+
+    ann_ret, ann_vol, sharpe, beta = calc_metrics(df, market_df)
+
+    # 個人化適配
+    expected_return = 5 + theta * 20
+    acceptable_vol = 10 + theta * 25
+    ideal_beta = 0.7 + theta * 0.8
+
+    sharpe_fit = min(sharpe / 3, 1)
+    return_fit = np.clip(1 - abs(ann_ret - expected_return) / expected_return, 0, 1)
+    vol_fit = np.clip(1 - ann_vol / acceptable_vol, 0, 1)
+    beta_fit = np.clip(1 - abs(beta - ideal_beta) / ideal_beta, 0, 1)
+
+    risk_score = (
+        vol_fit * 0.4
+        + beta_fit * 0.3
+        + return_fit * 0.2
+        + sharpe_fit * 0.1
+    )
+    personal_score = np.mean([sharpe_fit, return_fit, vol_fit, beta_fit])
+
+    # HotIndex
+    hot_metrics = compute_hot_index(df)
+
+    # 🆕 配息資訊（一定要在 loop 裡）
+    div_info = fetch_dividend_info(etf)
+
+    row = {
+        "ETF": etf,
+        "類型": etf_type,
+        "最新價": round(df["Close"].iloc[-1], 2),
+
+        # 配息欄位
+        "最新配息日": div_info["最新配息日"],
+        "最近一次配息": div_info["最近一次配息"],
+        "TTM配息": div_info["TTM配息"],
+        "TTM殖利率%": div_info["TTM殖利率%"],
+
+        "Sharpe": round(sharpe, 2),
+        "Beta": round(beta, 2),
+        "年化報酬%": round(ann_ret, 2),
+        "年化波動%": round(ann_vol, 2),
+        "個人化分數": round(personal_score, 3),
+        "風險適配分數": round(risk_score, 3),
+        "volume_score": hot_metrics["volume_score"],
+        "volatility": hot_metrics["volatility"],
+        "flow_proxy": hot_metrics["flow_proxy"],
+        "Sharpe適配": round(sharpe_fit, 2),
+        "報酬適配": round(return_fit, 2),
+        "波動適配": round(vol_fit, 2),
+        "Beta適配": round(beta_fit, 2),
+    }
+
     rows.append(row)
-
-df_all = pd.DataFrame(rows)
-
-# HotIndex z-score
-for col in ["volume_score", "volatility", "flow_proxy"]:
-    df_all[col + "_z"] = robust_zscore(df_all[col])
-
-df_all["hot_index"] = df_all[["volume_score_z", "volatility_z", "flow_proxy_z"]].sum(axis=1)
-
-# HotIndex 正規化
-hot_min = df_all["hot_index"].min()
-hot_max = df_all["hot_index"].max()
-df_all["hot_index_norm"] = 0.5 if hot_max - hot_min == 0 else (df_all["hot_index"] - hot_min) / (hot_max - hot_min)
-
 # ===============================
 # 計算個人化分數 component（θ 驅動）
 # ===============================
