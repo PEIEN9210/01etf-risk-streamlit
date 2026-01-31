@@ -108,7 +108,56 @@ def fetch_all_price_data(etf_list, benchmark, period="1y"):
         except Exception as e:
             data[code] = None
     return data
+# ===============================
+# 配息資料抓取（增量）
+# ===============================
+@st.cache_data(ttl=86400)
+def fetch_dividend_info(code):
+    """
+    回傳：
+    - 最新配息日
+    - 最近一次配息
+    - TTM 年化配息
+    - TTM 殖利率（%）
+    """
+    try:
+        ticker = yf.Ticker(code)
+        dividends = ticker.dividends
 
+        if dividends is None or dividends.empty:
+            return {
+                "最新配息日": None,
+                "最近一次配息": 0.0,
+                "TTM配息": 0.0,
+                "TTM殖利率%": 0.0
+            }
+
+        # 最近 12 個月配息
+        one_year_ago = pd.Timestamp.today() - pd.DateOffset(years=1)
+        ttm_dividends = dividends[dividends.index >= one_year_ago]
+
+        latest_date = dividends.index[-1]
+        latest_div = float(dividends.iloc[-1])
+        ttm_sum = float(ttm_dividends.sum())
+
+        # 最新價格（用於殖利率）
+        price = ticker.history(period="5d")["Close"].iloc[-1]
+        yield_ttm = (ttm_sum / price) * 100 if price > 0 else 0
+
+        return {
+            "最新配息日": latest_date.date(),
+            "最近一次配息": round(latest_div, 3),
+            "TTM配息": round(ttm_sum, 3),
+            "TTM殖利率%": round(yield_ttm, 2)
+        }
+
+    except Exception:
+        return {
+            "最新配息日": None,
+            "最近一次配息": 0.0,
+            "TTM配息": 0.0,
+            "TTM殖利率%": 0.0
+        }
 
 # ===============================
 # 指標計算
