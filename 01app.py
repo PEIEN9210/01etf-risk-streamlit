@@ -211,6 +211,22 @@ for t in THETA_LIST:
 
 theta_display_closest = min(THETA_LIST,key=lambda x: abs(x-theta))
 df_ui = theta_rankings[theta_display_closest].head(TOP_N)
+# ===============================
+# 雷達圖專用資料（Top-N 內 0~1 視覺正規化）
+# 不影響任何原本計算、排序、表格、氣泡圖
+# ===============================
+radar_metrics = ["sharpe_fit", "return_fit", "vol_fit", "beta_fit"]
+
+df_radar = df_ui.copy()
+
+for col in radar_metrics:
+    min_v = df_radar[col].min()
+    max_v = df_radar[col].max()
+    if max_v > min_v:
+        df_radar[col] = (df_radar[col] - min_v) / (max_v - min_v)
+    else:
+        df_radar[col] = 0.5  # 避免 Top-N 全相等時除以 0
+
 
 # ===============================
 # Top-N 表格
