@@ -222,29 +222,48 @@ st.dataframe(df_ui[["ETF","類型","最新價","最新配息日","最近一次�
              use_container_width=True)
 
 # ===============================
-# Top-N 雷達圖 (Plotly)
+# Top 5 ETF 多指標雷達圖（Plotly + 0~1 自動放大）
 # ===============================
-st.subheader(f"🕸️ Top {TOP_N} ETF 多指標雷達圖")
+st.subheader("🕸️ Top 5 ETF 多指標雷達圖")
 
-radar_metrics = ["sharpe_fit","return_fit","vol_fit","beta_fit"]
-radar_data=[]
-for _, row in df_ui.iterrows():
-    values = [row[m] for m in radar_metrics]
-    values.append(values[0])  # 閉合
-    radar_data.append({"ETF":row["ETF"],"values":values})
+import plotly.graph_objects as go
+
+radar_metrics = ["sharpe_fit", "return_fit", "vol_fit", "beta_fit"]
+radar_labels = ["Sharpe", "Return", "Volatility", "Beta"]
 
 fig = go.Figure()
-for data in radar_data:
+
+for _, row in df_radar.iterrows():
+    values = [row[m] for m in radar_metrics]
+    values.append(values[0])  # 閉合
+
     fig.add_trace(go.Scatterpolar(
-        r=data["values"],
-        theta=[m for m in radar_metrics]+[radar_metrics[0]],
+        r=values,
+        theta=radar_labels + [radar_labels[0]],
         fill='toself',
-        name=data["ETF"]
+        name=row["ETF"],
+        opacity=0.6
     ))
 
-fig.update_layout(polar=dict(radialaxis=dict(visible=True,range=[0,1])),showlegend=True)
-st.plotly_chart(fig, use_container_width=True)
+fig.update_layout(
+    polar=dict(
+        radialaxis=dict(
+            visible=True,
+            range=[0, 1],
+            tickformat=".0%"
+        )
+    ),
+    legend=dict(
+        orientation="h",
+        yanchor="bottom",
+        y=-0.2,
+        xanchor="center",
+        x=0.5
+    ),
+    margin=dict(l=40, r=40, t=40, b=80)
+)
 
+st.plotly_chart(fig, use_container_width=True)
 # ===============================
 # Top-N 氣泡圖
 # ===============================
