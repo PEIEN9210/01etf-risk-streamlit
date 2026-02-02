@@ -32,11 +32,6 @@ if st.sidebar.button("📊 基本 ETF 分析"):
 if st.sidebar.button("🧠 ETF 風險因子分析"):
     st.session_state.page = "factor"
 
-if st.session_state.page == "main":
-    show_main_page()
-
-elif st.session_state.page == "factor":
-    show_factor_analysis_page()
 
 # ===============================
 # 基本設定
