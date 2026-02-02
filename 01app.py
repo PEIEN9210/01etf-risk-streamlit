@@ -14,32 +14,23 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
+from datetime import datetime, timedelta
+from scipy.stats import spearmanr
 import plotly.graph_objects as go
 import altair as alt
-import statsmodels.api as sm
-
-st.set_page_config(page_title="台灣 ETF 個人化推薦系統", layout="wide")
-
-# ===============================
-# Page State
-# ===============================
-if "page" not in st.session_state:
-    st.session_state.page = "main"
-
-st.sidebar.title("ETF 分析工具")
-if st.sidebar.button("📊 基本 ETF 分析"):
-    st.session_state.page = "main"
-if st.sidebar.button("🧠 ETF 風險因子分析"):
-    st.session_state.page = "factor"
 
 # ===============================
 # 基本設定
 # ===============================
+st.set_page_config(page_title="台灣 ETF 個人化推薦系統", layout="wide")
 st.title("📊 台灣 ETF 個人化 + 熱門 ETF 多準則資產排序框架 (僅供參考，不負投資風險:)")
 
 TRADING_DAYS = 252
-RISK_FREE_RATE = 0.01
+RISK_FREE_RATE = 0.01  # 無風險利率
 
+# ===============================
+# ETF Universe & 市場基準
+# ===============================
 ETF_LIST = {
     "0050.TW": "股票型",
     "006208.TW": "股票型",
@@ -52,7 +43,7 @@ ETF_LIST = {
 MARKET_BENCHMARK = "0050.TW"
 
 # ===============================
-# Sidebar：風險偏好
+# Sidebar：使用者設定
 # ===============================
 st.sidebar.header("👤 投資人風險設定")
 age = st.sidebar.slider("年齡", 20, 80, 35)
@@ -60,32 +51,66 @@ horizon = st.sidebar.slider("投資年限（年）", 1, 30, 10)
 loss_tol = st.sidebar.slider("可接受最大損失 (%)", 0, 50, 20)
 reaction = st.sidebar.radio("市場下跌 20% 時", ["賣出", "觀望", "加碼"])
 
-theta = ((80 - age)/60 + horizon/30 + loss_tol/50 + {"賣出":0,"觀望":0.5,"加碼":1}[reaction]) / 4
+theta = ((80 - age)/60 + horizon/30 + loss_tol/50 + {"賣出":0,"觀望":0.5,"加碼":1}[reaction])/4
 theta = np.clip(theta, 0, 1)
 st.sidebar.metric("θ（風險偏好指數）", round(theta, 2))
 
-def alpha_from_theta(theta, a_min=0.1, a_max=0.7):
-    return a_min + (a_max - a_min) * theta
+def alpha_from_theta(theta, alpha_min=0.1, alpha_max=0.7):
+    return alpha_min + (alpha_max - alpha_min) * theta
 
 ALPHA_MODEL = alpha_from_theta(theta)
 
+st.sidebar.header("⚖️ 綜合分數權重")
+st.sidebar.write(
+    f"📌 HotIndex 權重 (內生 α，依 θ 計算): {ALPHA_MODEL:.2f}\n"
+    f"📌 個人化分數權重: {1-ALPHA_MODEL:.2f}\n"
+    "(手動 slider α 僅供參考，不影響排序)"
+)
+st.sidebar.slider("HotIndex 權重（僅供參考）", 0.0, 1.0, 0.5, step=0.05)
+
+st.sidebar.header("📊 排序選擇")
+sort_option = st.sidebar.selectbox("選擇排序依據", ["Final Score (HotIndex + 個人化)", "風險適配分數（依 θ）"])
+
+st.sidebar.header("📈 Top N ETF 顯示")
+TOP_N = st.sidebar.slider("Top N ETF", 1, len(ETF_LIST), 5)
+
 # ===============================
-# 資料抓取
+# 抓取價格資料
 # ===============================
 @st.cache_data(ttl=86400)
 def fetch_all_price_data(etf_list, benchmark, period="1y"):
     data = {}
-    for code in set(list(etf_list.keys()) + [benchmark]):
-        df = yf.Ticker(code).history(period=period)
-        if not df.empty:
-            data[code] = df
+    tickers = list(etf_list.keys()) + [benchmark]
+    for code in set(tickers):
+        try:
+            df = yf.Ticker(code).history(period=period)
+            if not df.empty and len(df) >= 50:
+                data[code] = df
+        except Exception:
+            data[code] = None
     return data
 
-price_data = fetch_all_price_data(ETF_LIST, MARKET_BENCHMARK)
-market_df = price_data.get(MARKET_BENCHMARK)
+@st.cache_data(ttl=86400)
+def fetch_dividend_info(code):
+    try:
+        ticker = yf.Ticker(code)
+        dividends = ticker.dividends
+        if dividends is None or dividends.empty:
+            return {"最新配息日": None, "最近一次配息": 0.0, "TTM配息": 0.0, "TTM殖利率%": 0.0}
+        one_year_ago = pd.Timestamp.today() - pd.DateOffset(years=1)
+        ttm_dividends = dividends[dividends.index >= one_year_ago]
+        latest_date = dividends.index[-1]
+        latest_div = float(dividends.iloc[-1])
+        ttm_sum = float(ttm_dividends.sum())
+        price = ticker.history(period="5d")["Close"].iloc[-1]
+        yield_ttm = (ttm_sum / price) * 100 if price > 0 else 0
+        return {"最新配息日": latest_date.date(), "最近一次配息": round(latest_div,3),
+                "TTM配息": round(ttm_sum,3), "TTM殖利率%": round(yield_ttm,2)}
+    except Exception:
+        return {"最新配息日": None, "最近一次配息": 0.0, "TTM配息": 0.0, "TTM殖利率%": 0.0}
 
 # ===============================
-# 指標函數
+# 指標計算
 # ===============================
 def calc_metrics(df, market_df):
     r = df["Close"].pct_change().dropna()
@@ -94,70 +119,167 @@ def calc_metrics(df, market_df):
     r, mr = r.loc[idx], mr.loc[idx]
     ann_ret = r.mean() * TRADING_DAYS
     ann_vol = r.std() * np.sqrt(TRADING_DAYS)
-    sharpe = (ann_ret - RISK_FREE_RATE) / ann_vol if ann_vol > 0 else 0
+    sharpe = (ann_ret - RISK_FREE_RATE) / ann_vol if ann_vol>0 else 0
     beta = np.cov(r, mr)[0,1] / np.var(mr)
     return ann_ret*100, ann_vol*100, sharpe, beta
+
+def compute_hot_index(df, window=20):
+    volume_ma = df["Volume"].rolling(window).mean().iloc[-1]
+    returns = df["Close"].pct_change()
+    volatility = returns.rolling(window).std().iloc[-1]
+    flow_proxy = (df["Close"]*df["Volume"]).rolling(window).mean().iloc[-1]
+    return {"volume_score": volume_ma, "volatility": volatility, "flow_proxy": flow_proxy}
 
 def robust_zscore(series):
     med = np.median(series)
     mad = np.median(np.abs(series - med))
-    return (series - med) / mad if mad != 0 else 0
+    if mad == 0:
+        return pd.Series(0, index=series.index)
+    return (series - med)/mad
+
+def compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta):
+    expected_return = 5 + theta * 20
+    acceptable_vol = 10 + theta * 25
+    ideal_beta = 0.7 + theta * 0.8
+    sharpe_fit = min(sharpe/3,1)
+    return_fit = np.clip(1 - abs(ann_ret - expected_return)/expected_return,0,1)
+    vol_fit = np.clip(1 - ann_vol/acceptable_vol,0,1)
+    beta_fit = np.clip(1 - abs(beta - ideal_beta)/ideal_beta,0,1)
+    personal_score = np.mean([sharpe_fit, return_fit, vol_fit, beta_fit])
+    return {"personal_score": personal_score, "sharpe_fit":sharpe_fit, "return_fit":return_fit,
+            "vol_fit":vol_fit,"beta_fit":beta_fit}
+
+def compute_final_score(hot_index_norm, personal_score, alpha):
+    return alpha*hot_index_norm + (1-alpha)*personal_score
 
 # ===============================
-# 主資料表建立（一次）
+# 主流程
 # ===============================
-rows = []
+price_data = fetch_all_price_data(ETF_LIST, MARKET_BENCHMARK)
+market_df = price_data.get(MARKET_BENCHMARK)
+
+rows=[]
 for etf, etf_type in ETF_LIST.items():
     df = price_data.get(etf)
     if df is None or market_df is None:
         continue
     ann_ret, ann_vol, sharpe, beta = calc_metrics(df, market_df)
-    rows.append({
-        "ETF": etf,
-        "類型": etf_type,
-        "Sharpe": sharpe,
-        "Beta": beta,
-        "年化報酬%": ann_ret,
-        "年化波動%": ann_vol
-    })
+    comp = compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta)
+    risk_score = comp["vol_fit"]*0.4 + comp["beta_fit"]*0.3 + comp["return_fit"]*0.2 + comp["sharpe_fit"]*0.1
+    div_info = fetch_dividend_info(etf)
+    hot_metrics = compute_hot_index(df)
+    row = {"ETF":etf, "類型":etf_type, "最新價":round(df["Close"].iloc[-1],2),
+           "最新配息日": div_info["最新配息日"], "最近一次配息":div_info["最近一次配息"],
+           "TTM配息":div_info["TTM配息"], "TTM殖利率%":div_info["TTM殖利率%"],
+           "Sharpe":round(sharpe,2),"Beta":round(beta,2),"年化報酬%":round(ann_ret,2),
+           "年化波動%":round(ann_vol,2),"個人化分數":round(comp["personal_score"],3),
+           "風險適配分數":round(risk_score,3),
+           "volume_score":hot_metrics["volume_score"], "volatility":hot_metrics["volatility"],
+           "flow_proxy":hot_metrics["flow_proxy"],
+           "Sharpe適配":round(comp["sharpe_fit"],2), "報酬適配":round(comp["return_fit"],2),
+           "波動適配":round(comp["vol_fit"],2), "Beta適配":round(comp["beta_fit"],2)}
+    rows.append(row)
 
 df_all = pd.DataFrame(rows)
+df_all["hot_index"] = df_all["volume_score"] + df_all["flow_proxy"] - df_all["volatility"]
+df_all["hot_index_norm"] = robust_zscore(df_all["hot_index"]).fillna(0)
 
 # ===============================
-# 因子分析頁
+# Ranking by θ
 # ===============================
-def load_factor_data(freq="M"):
-    mkt = yf.Ticker("^TWII").history(period="10y")
-    mkt["MKT"] = mkt["Close"].pct_change()
-    factors = mkt[["MKT"]].dropna()
-    factors["SMB"] = 0.0
-    factors["HML"] = 0.0
-    factors["RF"] = RISK_FREE_RATE / TRADING_DAYS
-    return factors.resample(freq).last()
+THETA_LIST = [0.0,0.25,0.5,0.75,1.0]
+theta_rankings = {}
 
-def run_factor_regression(etf_code, freq):
-    etf_df = yf.Ticker(etf_code).history(period="10y")
-    etf_ret = etf_df["Close"].pct_change().dropna().to_frame("ETF")
-    if freq == "M":
-        etf_ret = etf_ret.resample("M").last()
-    factors = load_factor_data(freq)
-    data = etf_ret.join(factors, how="inner")
-    Y = data["ETF"] - data["RF"]
-    X = sm.add_constant(data[["MKT","SMB","HML"]])
-    return sm.OLS(Y, X).fit()
+for t in THETA_LIST:
+    rows_theta=[]
+    for etf, etf_type in ETF_LIST.items():
+        df = price_data.get(etf)
+        if df is None or market_df is None:
+            continue
+        ann_ret, ann_vol, sharpe, beta = calc_metrics(df, market_df)
+        comp = compute_personalized_score(ann_ret, ann_vol, sharpe, beta, t)
+        final_score = compute_final_score(df_all.loc[df_all["ETF"]==etf,"hot_index_norm"].values[0],
+                                          comp["personal_score"], ALPHA_MODEL)
+        base_row = df_all[df_all["ETF"]==etf].iloc[0]
+        row = {"ETF":etf,"類型":etf_type,"θ":t,"最新價":base_row["最新價"],
+               "最新配息日":base_row["最新配息日"],"最近一次配息":base_row["最近一次配息"],
+               "TTM配息":base_row["TTM配息"],"TTM殖利率%":base_row["TTM殖利率%"],
+               "final_score":final_score,**comp,"hot_index":base_row["hot_index"]}
+        rows_theta.append(row)
+    df_theta = pd.DataFrame(rows_theta).sort_values("final_score",ascending=False)
+    theta_rankings[t] = df_theta
 
-def show_factor_page():
-    st.title("🧠 ETF 風險因子分析")
-    etf = st.selectbox("選擇 ETF", list(ETF_LIST.keys()))
-    freq = st.radio("資料頻率", ["日資料","月資料"])
-    if st.button("開始因子回歸分析"):
-        model = run_factor_regression(etf, "D" if freq=="日資料" else "M")
-        st.text(model.summary())
+theta_display_closest = min(THETA_LIST,key=lambda x: abs(x-theta))
+df_ui = theta_rankings[theta_display_closest].head(TOP_N)
+# ===============================
+# 雷達圖專用資料（Top-N 內 0~1 視覺正規化）
+# 不影響任何原本計算、排序、表格、氣泡圖
+# ===============================
+radar_metrics = ["sharpe_fit", "return_fit", "vol_fit", "beta_fit"]
+
+df_radar = df_ui.copy()
+
+for col in radar_metrics:
+    min_v = df_radar[col].min()
+    max_v = df_radar[col].max()
+    if max_v > min_v:
+        df_radar[col] = (df_radar[col] - min_v) / (max_v - min_v)
+    else:
+        df_radar[col] = 0.5  # 避免 Top-N 全相等時除以 0
+
 
 # ===============================
-# Page Router
+# Top-N 表格
 # ===============================
-if st.session_state.page == "main":
-    st.dataframe(df_all, use_container_width=True)
-elif st.session_state.page == "factor":
-    show_factor_page()
+st.subheader(f"🎯 Top {TOP_N} ETF 排序（θ={round(theta,2)}, final_score）")
+st.dataframe(df_ui[["ETF","類型","最新價","最新配息日","最近一次配息",
+                    "TTM配息","TTM殖利率%","final_score","personal_score",
+                    "sharpe_fit","return_fit","vol_fit","beta_fit","hot_index"]],
+             use_container_width=True)
+
+# ===============================
+# Top-N 雷達圖 (Plotly，Top-N 內 0~1 放大顯示)
+# ===============================
+st.subheader(f"🕸️ Top {TOP_N} ETF 多指標雷達圖")
+
+radar_labels = ["Sharpe", "Return", "Volatility", "Beta"]
+
+fig = go.Figure()
+
+for _, row in df_radar.iterrows():
+    values = [row[m] for m in radar_metrics]
+    values.append(values[0])  # 閉合
+
+    fig.add_trace(go.Scatterpolar(
+        r=values,
+        theta=radar_labels + [radar_labels[0]],
+        fill="toself",
+        name=row["ETF"],
+        opacity=0.6
+    ))
+
+fig.update_layout(
+    polar=dict(
+        radialaxis=dict(
+            visible=True,
+            range=[0, 1]
+        )
+    ),
+    showlegend=True,
+    margin=dict(l=40, r=40, t=40, b=60)
+)
+
+st.plotly_chart(fig, use_container_width=True)
+# ===============================
+# Top-N 氣泡圖
+# ===============================
+st.subheader(f"💭 Top {TOP_N} ETF 氣泡圖（θ={round(theta,2)}）")
+bubble = alt.Chart(df_ui).mark_circle(opacity=0.7, stroke="black", strokeWidth=0.5).encode(
+    x=alt.X("sharpe_fit:Q", title="Sharpe 適配"),
+    y=alt.Y("personal_score:Q", title="個人化分數"),
+    size=alt.Size("beta_fit:Q", title="Beta 適配", scale=alt.Scale(range=[100,1600])),
+    color=alt.Color("類型:N", title="ETF 類型"),
+    tooltip=["ETF","sharpe_fit","return_fit","vol_fit","beta_fit",
+             "personal_score","hot_index","final_score"]
+)
+st.altair_chart(bubble, use_container_width=True)
