@@ -169,30 +169,45 @@ def compute_final_score(hot_index_norm, personal_score, alpha):
 # ===============================
 # 主流程
 # ===============================
-price_data = fetch_all_price_data(ETF_LIST, MARKET_BENCHMARK)
-market_df = price_data.get(MARKET_BENCHMARK)
+def show_main_page():
+    price_data = fetch_all_price_data(ETF_LIST, MARKET_BENCHMARK)
+    market_df = price_data.get(MARKET_BENCHMARK)
 
-rows=[]
-for etf, etf_type in ETF_LIST.items():
-    df = price_data.get(etf)
-    if df is None or market_df is None:
-        continue
-    ann_ret, ann_vol, sharpe, beta = calc_metrics(df, market_df)
-    comp = compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta)
-    risk_score = comp["vol_fit"]*0.4 + comp["beta_fit"]*0.3 + comp["return_fit"]*0.2 + comp["sharpe_fit"]*0.1
-    div_info = fetch_dividend_info(etf)
-    hot_metrics = compute_hot_index(df)
-    row = {"ETF":etf, "類型":etf_type, "最新價":round(df["Close"].iloc[-1],2),
-           "最新配息日": div_info["最新配息日"], "最近一次配息":div_info["最近一次配息"],
-           "TTM配息":div_info["TTM配息"], "TTM殖利率%":div_info["TTM殖利率%"],
-           "Sharpe":round(sharpe,2),"Beta":round(beta,2),"年化報酬%":round(ann_ret,2),
-           "年化波動%":round(ann_vol,2),"個人化分數":round(comp["personal_score"],3),
-           "風險適配分數":round(risk_score,3),
-           "volume_score":hot_metrics["volume_score"], "volatility":hot_metrics["volatility"],
-           "flow_proxy":hot_metrics["flow_proxy"],
-           "Sharpe適配":round(comp["sharpe_fit"],2), "報酬適配":round(comp["return_fit"],2),
-           "波動適配":round(comp["vol_fit"],2), "Beta適配":round(comp["beta_fit"],2)}
-    rows.append(row)
+    rows=[]
+    for etf, etf_type in ETF_LIST.items():
+        df = price_data.get(etf)
+        if df is None or market_df is None:
+            continue
+        ann_ret, ann_vol, sharpe, beta = calc_metrics(df, market_df)
+        comp = compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta)
+        risk_score = comp["vol_fit"]*0.4 + comp["beta_fit"]*0.3 + comp["return_fit"]*0.2 + comp["sharpe_fit"]*0.1
+        div_info = fetch_dividend_info(etf)
+        hot_metrics = compute_hot_index(df)
+
+        row = {
+            "ETF":etf, "類型":etf_type, "最新價":round(df["Close"].iloc[-1],2),
+            "最新配息日": div_info["最新配息日"], "最近一次配息":div_info["最近一次配息"],
+            "TTM配息":div_info["TTM配息"], "TTM殖利率%":div_info["TTM殖利率%"],
+            "Sharpe":round(sharpe,2),"Beta":round(beta,2),
+            "年化報酬%":round(ann_ret,2),"年化波動%":round(ann_vol,2),
+            "個人化分數":round(comp["personal_score"],3),
+            "風險適配分數":round(risk_score,3),
+            "volume_score":hot_metrics["volume_score"],
+            "volatility":hot_metrics["volatility"],
+            "flow_proxy":hot_metrics["flow_proxy"],
+            "Sharpe適配":round(comp["sharpe_fit"],2),
+            "報酬適配":round(comp["return_fit"],2),
+            "波動適配":round(comp["vol_fit"],2),
+            "Beta適配":round(comp["beta_fit"],2)
+        }
+        rows.append(row)
+
+    df_all = pd.DataFrame(rows)
+    df_all["hot_index"] = df_all["volume_score"] + df_all["flow_proxy"] - df_all["volatility"]
+    df_all["hot_index_norm"] = robust_zscore(df_all["hot_index"]).fillna(0)
+
+    # === 你原本的 θ ranking、Top-N、雷達圖、氣泡圖 ===
+    # ⛔ 完全照你原本的程式碼貼進來即可（我這裡不再重複）
 
 df_all = pd.DataFrame(rows)
 df_all["hot_index"] = df_all["volume_score"] + df_all["flow_proxy"] - df_all["volatility"]
