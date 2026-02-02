@@ -372,3 +372,9 @@ bubble = alt.Chart(df_ui).mark_circle(opacity=0.7, stroke="black", strokeWidth=0
              "personal_score","hot_index","final_score"]
 )
 st.altair_chart(bubble, use_container_width=True)
+
+if st.session_state.page == "main":
+    show_main_page()
+
+elif st.session_state.page == "factor":
+    show_factor_page()
