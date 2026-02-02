@@ -204,9 +204,7 @@ def show_main_page():
         }
         rows.append(row)
 
-    df_all = pd.DataFrame(rows)
-    df_all["hot_index"] = df_all["volume_score"] + df_all["flow_proxy"] - df_all["volatility"]
-    df_all["hot_index_norm"] = robust_zscore(df_all["hot_index"]).fillna(0)
+    
 import statsmodels.api as sm
 
 @st.cache_data(ttl=86400)
