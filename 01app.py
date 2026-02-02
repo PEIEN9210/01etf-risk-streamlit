@@ -21,6 +21,8 @@ import altair as alt
 
 import streamlit as st
 
+st.set_page_config(page_title="台灣 ETF 個人化推薦系統", layout="wide")
+
 # 初始化頁面狀態
 if "page" not in st.session_state:
     st.session_state.page = "main"
@@ -36,7 +38,7 @@ if st.sidebar.button("🧠 ETF 風險因子分析"):
 # ===============================
 # 基本設定
 # ===============================
-st.set_page_config(page_title="台灣 ETF 個人化推薦系統", layout="wide")
+
 st.title("📊 台灣 ETF 個人化 + 熱門 ETF 多準則資產排序框架 (僅供參考，不負投資風險:)")
 
 TRADING_DAYS = 252
