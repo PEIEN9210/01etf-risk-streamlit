@@ -205,7 +205,67 @@ def show_main_page():
     df_all = pd.DataFrame(rows)
     df_all["hot_index"] = df_all["volume_score"] + df_all["flow_proxy"] - df_all["volatility"]
     df_all["hot_index_norm"] = robust_zscore(df_all["hot_index"]).fillna(0)
+import statsmodels.api as sm
 
+@st.cache_data(ttl=86400)
+def load_factor_data(freq="M"):
+    """
+    簡化版：用台股大盤 proxy 當市場因子
+    SMB / HML 示意用（研究時你可換成真正台股因子）
+    """
+    mkt = yf.Ticker("^TWII").history(period="10y")
+    mkt["MKT"] = mkt["Close"].pct_change()
+
+    factors = mkt[["MKT"]].dropna()
+    factors["SMB"] = 0.0   # placeholder
+    factors["HML"] = 0.0   # placeholder
+    factors["RF"] = RISK_FREE_RATE / TRADING_DAYS
+    return factors.resample(freq).last()
+
+
+def run_factor_regression(etf_code, freq):
+    etf_df = yf.Ticker(etf_code).history(period="10y")
+    etf_ret = etf_df["Close"].pct_change().dropna().to_frame("ETF")
+
+    if freq == "M":
+        etf_ret = etf_ret.resample("M").last()
+
+    factors = load_factor_data(freq)
+    data = etf_ret.join(factors, how="inner")
+
+    Y = data["ETF"] - data["RF"]
+    X = data[["MKT", "SMB", "HML"]]
+    X = sm.add_constant(X)
+
+    model = sm.OLS(Y, X).fit()
+    return model
+
+
+def show_factor_page():
+    st.title("🧠 ETF 風險因子分析（Factor Regression）")
+
+    st.markdown("""
+    本頁使用 **Fama-French 類型因子回歸模型**，
+    分析 ETF 報酬的 **系統性風險來源**，而非單純績效比較。
+    """)
+
+    etf = st.selectbox("選擇 ETF", list(ETF_LIST.keys()))
+    freq = st.radio("資料頻率", ["日資料", "月資料"])
+
+    if st.button("開始因子回歸分析"):
+        model = run_factor_regression(etf, "D" if freq=="日資料" else "M")
+
+        st.subheader("📐 回歸結果（OLS）")
+        st.text(model.summary())
+
+        st.subheader("📊 因子曝險解讀")
+        st.write({
+            "Alpha（截距）": round(model.params["const"],6),
+            "市場因子 β": round(model.params["MKT"],3),
+            "SMB β": round(model.params["SMB"],3),
+            "HML β": round(model.params["HML"],3),
+            "R²": round(model.rsquared,3)
+        })
     # === 你原本的 θ ranking、Top-N、雷達圖、氣泡圖 ===
     # ⛔ 完全照你原本的程式碼貼進來即可（我這裡不再重複）
 
