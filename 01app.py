@@ -24,6 +24,14 @@ import streamlit as st
 # 初始化頁面狀態
 if "page" not in st.session_state:
     st.session_state.page = "main"
+st.sidebar.title("ETF 分析工具")
+
+if st.sidebar.button("📊 基本 ETF 分析"):
+    st.session_state.page = "main"
+
+if st.sidebar.button("🧠 ETF 風險因子分析"):
+    st.session_state.page = "factor"
+
 
 # ===============================
 # 基本設定
