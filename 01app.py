@@ -19,6 +19,12 @@ from scipy.stats import spearmanr
 import plotly.graph_objects as go
 import altair as alt
 
+import streamlit as st
+
+# 初始化頁面狀態
+if "page" not in st.session_state:
+    st.session_state.page = "main"
+
 # ===============================
 # 基本設定
 # ===============================
