@@ -174,6 +174,9 @@ def compute_final_score(hot_index_norm, personal_score, alpha):
 def show_main_page():
     price_data = fetch_all_price_data(ETF_LIST, MARKET_BENCHMARK)
     market_df = price_data.get(MARKET_BENCHMARK)
+    df_all = pd.DataFrame(rows)
+    df_all["hot_index"] = df_all["volume_score"] + df_all["flow_proxy"] - df_all["volatility"]
+    df_all["hot_index_norm"] = robust_zscore(df_all["hot_index"]).fillna(0)
 
     rows=[]
     for etf, etf_type in ETF_LIST.items():
