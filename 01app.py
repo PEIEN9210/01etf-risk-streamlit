@@ -153,6 +153,17 @@ def compute_final_score(hot_index_norm, personal_score, alpha):
     return alpha*hot_index_norm + (1-alpha)*personal_score
 
 # ===============================
+# V2 Extension：Human–Asset Matching
+# （不影響任何 V1 功能）
+# ===============================
+
+V2_HORIZONS = {
+    "1y": {"period": "1y", "weight": 0.5},
+    "3y": {"period": "3y", "weight": 0.3},
+    "5y": {"period": "5y", "weight": 0.2},
+}
+
+# ===============================
 # 主流程
 # ===============================
 price_data = fetch_all_price_data(ETF_LIST, MARKET_BENCHMARK)
