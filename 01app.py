@@ -90,7 +90,20 @@ def fetch_all_price_data(etf_list, benchmark, period="1y"):
             data[code] = None
     return data
 
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=300)  # 5 分鐘
+def fetch_all_price_data(etf_list, benchmark, period="1y"):
+    data = {}
+    tickers = list(etf_list.keys()) + [benchmark]
+    for code in set(tickers):
+        try:
+            df = yf.Ticker(code).history(period=period)
+            if not df.empty and len(df) >= 50:
+                data[code] = df
+        except Exception:
+            data[code] = None
+    return data
+
+@st.cache_data(ttl=300)  # 5 分鐘
 def fetch_dividend_info(code):
     try:
         ticker = yf.Ticker(code)
@@ -101,8 +114,8 @@ def fetch_dividend_info(code):
         ttm_dividends = dividends[dividends.index >= one_year_ago]
         latest_date = dividends.index[-1]
         latest_div = float(dividends.iloc[-1])
-        ttm_sum = float(ttm_dividends.sum())
         price = ticker.history(period="5d")["Close"].iloc[-1]
+        ttm_sum = float(ttm_dividends.sum())
         yield_ttm = (ttm_sum / price) * 100 if price > 0 else 0
         return {"最新配息日": latest_date.date(), "最近一次配息": round(latest_div,3),
                 "TTM配息": round(ttm_sum,3), "TTM殖利率%": round(yield_ttm,2)}
