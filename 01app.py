@@ -114,7 +114,12 @@ def fetch_dividend_info(code):
         latest_date = dividends.index[-1]
         latest_div = float(dividends.iloc[-1])
         ttm_sum = float(ttm_dividends.sum())
-        price = ticker.history(period="5d")["Close"].iloc[-1]
+        price_df = ticker.history(period="5d")
+        if price_df.empty:
+            return {"最新配息日": None, "最近一次配息": 0.0,
+                    "TTM配息": 0.0, "TTM殖利率%": 0.0}
+
+        price = price_df["Close"].iloc[-1]
         yield_ttm = (ttm_sum / price) * 100 if price > 0 else 0
         return {"最新配息日": latest_date.date(), "最近一次配息": round(latest_div,3),
                 "TTM配息": round(ttm_sum,3), "TTM殖利率%": round(yield_ttm,2)}
