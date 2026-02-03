@@ -234,6 +234,10 @@ for t in THETA_LIST:
 
 theta_display_closest = min(THETA_LIST,key=lambda x: abs(x-theta))
 df_ui = theta_rankings[theta_display_closest].head(TOP_N)
+if market_df is not None:
+    last_price_time = market_df.index[-1]
+    st.caption(f"📅 價格資料時間：{last_price_time}")
+
 # ===============================
 # 雷達圖專用資料（Top-N 內 0~1 視覺正規化）
 # 不影響任何原本計算、排序、表格、氣泡圖
