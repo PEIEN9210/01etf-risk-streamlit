@@ -81,15 +81,27 @@ TOP_N = st.sidebar.slider("Top N ETF", 1, len(ETF_LIST), 5)
 def fetch_all_price_data(etf_list, benchmark, period="1y"):
     data = {}
     tickers = list(etf_list.keys()) + [benchmark]
+
     for code in set(tickers):
         try:
-            df = yf.Ticker(code).history(period=period)
+            ticker = yf.Ticker(code)
+
+            # ① 先嘗試抓盤中 1 分鐘資料（若 Yahoo 有提供）
+            df = ticker.history(period="1d", interval="1m")
+
+            # ② 若失敗或資料太少，自動退回日線（穩定來源）
+            if df.empty or len(df) < 10:
+                df = ticker.history(period=period)
+
             if not df.empty and len(df) >= 50:
                 data[code] = df
+            else:
+                data[code] = None
+
         except Exception:
             data[code] = None
-    return data
 
+    return data
 @st.cache_data(ttl=86400)
 def fetch_dividend_info(code):
     try:
