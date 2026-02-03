@@ -77,33 +77,35 @@ TOP_N = st.sidebar.slider("Top N ETF", 1, len(ETF_LIST), 5)
 # ===============================
 # 抓取價格資料
 # ===============================
-@st.cache_data(ttl=86400)
-def fetch_all_price_data(etf_list, benchmark, period="1y"):
-    data = {}
-    tickers = list(etf_list.keys()) + [benchmark]
+@st.cache_data(ttl=0)  # ttl=0 = 每次重新抓即時資料
+def fetch_all_price_data(etf_list, benchmark):
+    price_data = {}
 
-    for code in set(tickers):
+    for code in list(etf_list.keys()) + [benchmark]:
         try:
-            ticker = yf.Ticker(code)
+            df = yf.download(
+                code,
+                period="6mo",
+                interval="1d",
+                auto_adjust=True,
+                progress=False,
+                threads=False
+            )
 
-            # ① 先嘗試抓盤中 1 分鐘資料（若 Yahoo 有提供）
-            ticker = yf.Ticker(code)
-            df = ticker.history(period=period)
+            if df.empty:
+                st.warning(f"{code} 價格資料為空")
+                continue
 
-            # ② 若失敗或資料太少，自動退回日線（穩定來源）
-            if df.empty or len(df) < 10:
-                df = ticker.history(period=period)
-
-            if not df.empty and len(df) >= 50:
-                data[code] = df
-            else:
-                data[code] = None
+            df = df[["Close"]].dropna()
+            price_data[code] = df
 
         except Exception as e:
-                data[code] = None
-        st.warning(f"{code} 價格資料抓取失敗：{e}")
+            # ✅ e 只在 except 裡使用，不會再 UnboundLocalError
+            st.warning(f"{code} 價格資料抓取失敗：{str(e)}")
+            continue
 
-    return data
+    return price_data
+    
 @st.cache_data(ttl=86400)
 def fetch_dividend_info(code):
     try:
