@@ -159,7 +159,7 @@ def calc_metrics(df, market_df):
     ann_ret = r.mean() * TRADING_DAYS
     ann_vol = r.std() * np.sqrt(TRADING_DAYS)
     sharpe = (ann_ret - RISK_FREE_RATE) / ann_vol if ann_vol>0 else 0
-    beta = np.cov(r, mr)[0,1] / np.var(mr)
+    beta = np.cov(r, mr)[0,1] / np.var(mr) if np.var(mr) > 0 else 0
     return ann_ret*100, ann_vol*100, sharpe, beta
 
 def compute_hot_index(df, window=20):
