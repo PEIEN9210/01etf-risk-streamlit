@@ -98,8 +98,9 @@ def fetch_all_price_data(etf_list, benchmark, period="1y"):
             else:
                 data[code] = None
 
-        except Exception:
-            data[code] = None
+        except Exception as e:
+                data[code] = None
+        st.warning(f"{code} 價格資料抓取失敗：{e}")
 
     return data
 @st.cache_data(ttl=86400)
