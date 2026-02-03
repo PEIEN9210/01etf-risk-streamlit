@@ -87,7 +87,8 @@ def fetch_all_price_data(etf_list, benchmark, period="1y"):
             ticker = yf.Ticker(code)
 
             # ① 先嘗試抓盤中 1 分鐘資料（若 Yahoo 有提供）
-            df = ticker.history(period="1d", interval="1m")
+            ticker = yf.Ticker(code)
+            df = ticker.history(period=period)
 
             # ② 若失敗或資料太少，自動退回日線（穩定來源）
             if df.empty or len(df) < 10:
