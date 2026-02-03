@@ -51,25 +51,35 @@ horizon = st.sidebar.slider("投資年限（年）", 1, 30, 10)
 loss_tol = st.sidebar.slider("可接受最大損失 (%)", 0, 50, 20)
 reaction = st.sidebar.radio("市場下跌 20% 時", ["賣出", "觀望", "加碼"])
 
-theta = ((80 - age)/60 + horizon/30 + loss_tol/50 + {"賣出":0,"觀望":0.5,"加碼":1}[reaction])/4
+theta = (
+    (80 - age) / 60
+    + horizon / 30
+    + loss_tol / 50
+    + {"賣出": 0, "觀望": 0.5, "加碼": 1}[reaction]
+) / 4
 theta = np.clip(theta, 0, 1)
 st.sidebar.metric("θ（風險偏好指數）", round(theta, 2))
 
+
 def alpha_from_theta(theta, alpha_min=0.1, alpha_max=0.7):
     return alpha_min + (alpha_max - alpha_min) * theta
+
 
 ALPHA_MODEL = alpha_from_theta(theta)
 
 st.sidebar.header("⚖️ 綜合分數權重")
 st.sidebar.write(
     f"📌 HotIndex 權重 (內生 α，依 θ 計算): {ALPHA_MODEL:.2f}\n"
-    f"📌 個人化分數權重: {1-ALPHA_MODEL:.2f}\n"
+    f"📌 個人化分數權重: {1 - ALPHA_MODEL:.2f}\n"
     "(手動 slider α 僅供參考，不影響排序)"
 )
 st.sidebar.slider("HotIndex 權重（僅供參考）", 0.0, 1.0, 0.5, step=0.05)
 
 st.sidebar.header("📊 排序選擇")
-sort_option = st.sidebar.selectbox("選擇排序依據", ["Final Score (HotIndex + 個人化)", "風險適配分數（依 θ）"])
+sort_option = st.sidebar.selectbox(
+    "選擇排序依據",
+    ["Final Score (HotIndex + 個人化)", "風險適配分數（依 θ）"],
+)
 
 st.sidebar.header("📈 Top N ETF 顯示")
 TOP_N = st.sidebar.slider("Top N ETF", 1, len(ETF_LIST), 5)
@@ -77,7 +87,7 @@ TOP_N = st.sidebar.slider("Top N ETF", 1, len(ETF_LIST), 5)
 # ===============================
 # 抓取價格資料
 # ===============================
-@st.cache_data(ttl=0)  # ttl=0 = 每次重新抓即時資料
+@st.cache_data(ttl=0)
 def fetch_all_price_data(etf_list, benchmark):
     price_data = {}
 
@@ -89,23 +99,22 @@ def fetch_all_price_data(etf_list, benchmark):
                 interval="1d",
                 auto_adjust=True,
                 progress=False,
-                threads=False
+                threads=False,
             )
 
-            if df.empty:
+            if df is None or df.empty:
                 st.warning(f"{code} 價格資料為空")
                 continue
 
-            df = df[["Close"]].dropna()
-            price_data[code] = df
+            price_data[code] = df.copy()
 
-        except Exception as e:
-            # ✅ e 只在 except 裡使用，不會再 UnboundLocalError
-            st.warning(f"{code} 價格資料抓取失敗：{str(e)}")
+        except Exception as err:
+            st.warning(f"{code} 價格資料抓取失敗：{err}")
             continue
 
     return price_data
-    
+
+
 @st.cache_data(ttl=86400)
 def fetch_dividend_info(code):
     try:
@@ -113,8 +122,12 @@ def fetch_dividend_info(code):
         dividends = ticker.dividends
 
         if dividends is None or dividends.empty:
-            return {"最新配息日": None, "最近一次配息": 0.0,
-                    "TTM配息": 0.0, "TTM殖利率%": 0.0}
+            return {
+                "最新配息日": None,
+                "最近一次配息": 0.0,
+                "TTM配息": 0.0,
+                "TTM殖利率%": 0.0,
+            }
 
         dividends = dividends.sort_index()
         one_year_ago = dividends.index.max() - pd.DateOffset(years=1)
@@ -136,7 +149,16 @@ def fetch_dividend_info(code):
             "最新配息日": latest_date.date(),
             "最近一次配息": round(latest_div, 3),
             "TTM配息": round(ttm_sum, 3),
-            "TTM殖利率%": round(yield_ttm, 2)
+            "TTM殖利率%": round(yield_ttm, 2),
+        }
+
+    except Exception as e:
+        st.warning(f"{code} 配息資料抓取失敗：{e}")
+        return {
+            "最新配息日": None,
+            "最近一次配息": 0.0,
+            "TTM配息": 0.0,
+            "TTM殖利率%": 0.0,
         }
 
     except Exception as e:
