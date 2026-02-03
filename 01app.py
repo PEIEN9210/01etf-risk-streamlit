@@ -7,9 +7,6 @@ Original file is located at
     https://colab.research.google.com/drive/1Y1jRJvzhlUjdd66vnUOBj57YzwXHYc1s
 """
 
-# app.py
-# -*- coding: utf-8 -*-
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -26,7 +23,7 @@ st.set_page_config(page_title="台灣 ETF 個人化推薦系統", layout="wide")
 st.title("📊 台灣 ETF 個人化 + 熱門 ETF 多準則資產排序框架 (僅供參考，不負投資風險:)")
 
 TRADING_DAYS = 252
-RISK_FREE_RATE = 0.01  # 無風險利率
+RISK_FREE_RATE = 0.01
 
 # ===============================
 # ETF Universe & 市場基準
@@ -90,7 +87,6 @@ TOP_N = st.sidebar.slider("Top N ETF", 1, len(ETF_LIST), 5)
 @st.cache_data(ttl=0)
 def fetch_all_price_data(etf_list, benchmark):
     price_data = {}
-
     for code in list(etf_list.keys()) + [benchmark]:
         try:
             df = yf.download(
@@ -101,17 +97,13 @@ def fetch_all_price_data(etf_list, benchmark):
                 progress=False,
                 threads=False,
             )
-
             if df is None or df.empty:
                 st.warning(f"{code} 價格資料為空")
                 continue
-
             price_data[code] = df.copy()
-
         except Exception as err:
             st.warning(f"{code} 價格資料抓取失敗：{err}")
             continue
-
     return price_data
 
 
@@ -138,11 +130,7 @@ def fetch_dividend_info(code):
         ttm_sum = float(ttm_dividends.sum())
 
         price_df = ticker.history(period="5d")
-        if price_df.empty or "Close" not in price_df:
-            price = np.nan
-        else:
-            price = price_df["Close"].iloc[-1]
-
+        price = price_df["Close"].iloc[-1] if not price_df.empty else np.nan
         yield_ttm = (ttm_sum / price) * 100 if price and price > 0 else 0
 
         return {
@@ -160,12 +148,6 @@ def fetch_dividend_info(code):
             "TTM配息": 0.0,
             "TTM殖利率%": 0.0,
         }
-
-    except Exception as e:
-        st.warning(f"{code} 配息資料抓取失敗：{e}")
-        return {"最新配息日": None, "最近一次配息": 0.0,
-                "TTM配息": 0.0, "TTM殖利率%": 0.0}
-
 # ===============================
 # 指標計算
 # ===============================
