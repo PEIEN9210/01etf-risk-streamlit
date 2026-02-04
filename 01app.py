@@ -202,6 +202,9 @@ for etf, etf_type in ETF_LIST.items():
     df = price_data.get(etf)
     if df is None or market_df is None:
         continue
+    latest_price = fetch_latest_price(etf)
+    if latest_price is None:
+        latest_price = float(df["Close"].iloc[-1])
     ann_ret, ann_vol, sharpe, beta = calc_metrics(df, market_df)
     comp = compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta)
     risk_score = comp["vol_fit"]*0.4 + comp["beta_fit"]*0.3 + comp["return_fit"]*0.2 + comp["sharpe_fit"]*0.1
