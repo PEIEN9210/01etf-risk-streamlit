@@ -99,7 +99,6 @@ def fetch_all_price_data(etf_list, benchmark, period="1y"):
             data[code] = None
     return data
 
-
 @st.cache_data(ttl=300)  # 5 分鐘
 def fetch_all_price_data(etf_list, benchmark, period="1y"):
     data = {}
@@ -112,6 +111,23 @@ def fetch_all_price_data(etf_list, benchmark, period="1y"):
         except Exception:
             data[code] = None
     return data
+
+@st.cache_data(ttl=30)  # 30 秒
+def fetch_latest_price(code):
+    try:
+        ticker = yf.Ticker(code)
+        fast_info = getattr(ticker, "fast_info", None)
+        if fast_info:
+            for key in ("last_price", "lastPrice", "regularMarketPrice"):
+                price = fast_info.get(key)
+                if price:
+                    return float(price)
+        df = yf.download(code, period="1d", interval="1m", progress=False)
+        if df is None or df.empty:
+            return None
+        return float(df["Close"].iloc[-1])
+    except Exception:
+        return None
 
 @st.cache_data(ttl=300)  # 5 分鐘
 def fetch_dividend_info(code):
