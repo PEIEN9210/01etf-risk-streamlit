@@ -74,6 +74,12 @@ sort_option = st.sidebar.selectbox("選擇排序依據", ["Final Score (HotIndex
 st.sidebar.header("📈 Top N ETF 顯示")
 TOP_N = st.sidebar.slider("Top N ETF", 1, len(ETF_LIST), 5)
 
+st.sidebar.header("🔄 即時更新")
+if st.sidebar.button("清除快取並更新報價"):
+    st.cache_data.clear()
+    st.sidebar.success("已清除快取，將重新抓取報價")
+
+
 # ===============================
 # 抓取價格資料
 # ===============================
