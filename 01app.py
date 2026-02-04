@@ -210,6 +210,9 @@ for etf, etf_type in ETF_LIST.items():
     rows.append(row)
 
 df_all = pd.DataFrame(rows)
+if df_all.empty:
+    st.error("無法取得即時/歷史報價資料，請稍後重試或使用清除快取更新。")
+    st.stop()
 df_all["hot_index"] = df_all["volume_score"] + df_all["flow_proxy"] - df_all["volatility"]
 df_all["hot_index_norm"] = robust_zscore(df_all["hot_index"]).fillna(0)
 
