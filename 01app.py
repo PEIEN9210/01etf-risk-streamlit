@@ -78,6 +78,9 @@ st.sidebar.header("🔄 即時更新")
 if st.sidebar.button("清除快取並更新報價"):
     st.cache_data.clear()
     st.sidebar.success("已清除快取，將重新抓取報價")
+price_source = st.sidebar.selectbox("最新價來源", ["auto", "fast_info", "1m"], index=0)
+latest_ttl = st.sidebar.slider("最新價快取秒數", 0, 120, 10, step=5)
+st.sidebar.caption("提示：Yahoo 資料通常延遲，若需更即時請改用券商或官方 API。")
 
 
 # ===============================
