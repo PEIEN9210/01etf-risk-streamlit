@@ -196,7 +196,7 @@ for etf, etf_type in ETF_LIST.items():
     div_info = fetch_dividend_info(etf)
     hot_metrics = compute_hot_index(df)
     row = {
-        "ETF":etf, "類型":etf_type, "最新價":round(df["Close"].iloc[-1],2),
+        "ETF":etf, "類型":etf_type, "最新價":round(latest_price,2),
         "最新配息日": div_info["最新配息日"], "最近一次配息":div_info["最近一次配息"],
         "TTM配息":div_info["TTM配息"], "TTM殖利率%":div_info["TTM殖利率%"],
         "Sharpe":round(sharpe,2), "Beta":round(beta,2), "年化報酬%":round(ann_ret,2),
