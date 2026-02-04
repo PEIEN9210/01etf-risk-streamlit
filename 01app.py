@@ -83,6 +83,9 @@ if st.sidebar.button("清除快取並更新報價"):
 # ===============================
 # 抓取價格資料
 # ===============================
+# ===============================
+# 抓取價格資料
+# ===============================
 @st.cache_data(ttl=86400)
 def fetch_all_price_data(etf_list, benchmark, period="1y"):
     data = {}
@@ -95,6 +98,7 @@ def fetch_all_price_data(etf_list, benchmark, period="1y"):
         except Exception:
             data[code] = None
     return data
+
 
 @st.cache_data(ttl=300)  # 5 分鐘
 def fetch_all_price_data(etf_list, benchmark, period="1y"):
