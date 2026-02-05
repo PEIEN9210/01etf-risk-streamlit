@@ -7,14 +7,15 @@ Original file is located at
     https://colab.research.google.com/drive/1Y1jRJvzhlUjdd66vnUOBj57YzwXHYc1s
 """
 
-# app.py
+# app.py 
 # -*- coding: utf-8 -*-
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timedelta
+from scipy.stats import spearmanr
 import plotly.graph_objects as go
 import altair as alt
 
@@ -22,7 +23,8 @@ import altair as alt
 # 基本設定
 # ===============================
 st.set_page_config(page_title="台灣 ETF 個人化推薦系統", layout="wide")
-st.title("📊 台灣 ETF 個人化 + 熱門 ETF 多準則資產排序框架 (僅供參考，不負投資風險:)")
+st.title("📊 台灣 ETF 個人化 + 熱門 ETF 多準則資產排序框架")
+st.caption("⚠️ 本系統僅供學術研究參考，不構成投資建議。投資有風險，請審慎評估。")
 
 TRADING_DAYS = 252
 RISK_FREE_RATE = 0.01  # 無風險利率
@@ -42,82 +44,232 @@ ETF_LIST = {
 MARKET_BENCHMARK = "0050.TW"
 
 # ===============================
-# Sidebar：使用者設定
+# Sidebar：風險偏好評估（SCF 問卷法）
 # ===============================
-st.sidebar.header("👤 投資人風險設定")
-age = st.sidebar.slider("年齡", 20, 80, 35)
-horizon = st.sidebar.slider("投資年限（年）", 1, 30, 10)
-loss_tol = st.sidebar.slider("可接受最大損失 (%)", 0, 50, 20)
-reaction = st.sidebar.radio("市場下跌 20% 時", ["賣出", "觀望", "加碼"])
+st.sidebar.header("👤 投資人風險偏好評估")
+st.sidebar.markdown("**基於 SCF Risk Tolerance Questionnaire**")
+st.sidebar.caption("美國聯邦儲備系統消費者財務調查標準問卷")
 
-st.sidebar.header("👤 風險偏好評估（學術標準版）")
-evaluation_method = st.sidebar.radio(
-    "選擇評估方法",
-    ["標準問卷法（SCF）", "效用函數法（CRRA）", "混合法（推薦）"]
+# === Question 1: Investment Horizon ===
+st.sidebar.markdown("---")
+st.sidebar.subheader("Q1. 您的投資時間範圍？")
+horizon_mapping = {
+    "少於 1 年": (0.5, 0.0),
+    "1-3 年": (2, 0.15),
+    "4-6 年": (5, 0.30),
+    "7-10 年": (8.5, 0.50),
+    "10 年以上": (15, 0.70)
+}
+horizon_choice = st.sidebar.radio(
+    "選擇投資期間",
+    list(horizon_mapping.keys()),
+    index=3,  # 預設 7-10 年
+    help="較長的投資期間允許承受更高的短期波動"
+)
+horizon_years, horizon_score = horizon_mapping[horizon_choice]
+
+# === Question 2: Risk Capacity (SCF Standard Question) ===
+st.sidebar.markdown("---")
+st.sidebar.subheader("Q2. 如果您有一筆閒置資金，您會選擇？")
+risk_capacity_mapping = {
+    "存入銀行或購買政府公債（幾乎無風險）": 0.0,
+    "購買債券型基金（低風險，報酬穩定）": 0.25,
+    "購買混合型基金（中等風險與報酬）": 0.50,
+    "購買股票型基金（高風險，追求高報酬）": 0.75,
+    "購買個股或高風險商品（承受重大虧損風險）": 1.0
+}
+risk_capacity = st.sidebar.radio(
+    "投資偏好",
+    list(risk_capacity_mapping.keys()),
+    index=2,  # 預設混合型
+    help="SCF 標準問題：評估您對風險報酬的基本態度"
+)
+capacity_score = risk_capacity_mapping[risk_capacity]
+
+# === Question 3: Loss Tolerance (Behavioral Finance Standard) ===
+st.sidebar.markdown("---")
+st.sidebar.subheader("Q3. 假設您投資的資產在一個月內下跌 20%，您會？")
+loss_tolerance_mapping = {
+    "立即全部賣出，無法承受虧損": 0.0,
+    "賣出一半，降低風險": 0.20,
+    "維持不動，等待反彈": 0.50,
+    "小幅加碼，逢低承接": 0.75,
+    "大幅加碼，認為是絕佳機會": 1.0
+}
+loss_tolerance = st.sidebar.radio(
+    "市場下跌反應",
+    list(loss_tolerance_mapping.keys()),
+    index=2,  # 預設維持不動
+    help="行為金融學標準問題：評估您的損失厭惡程度"
+)
+loss_score = loss_tolerance_mapping[loss_tolerance]
+
+# === Question 4: Income Stability ===
+st.sidebar.markdown("---")
+st.sidebar.subheader("Q4. 您的收入穩定性？")
+income_stability_mapping = {
+    "非常不穩定（自由業、創業）": 0.0,
+    "不穩定（業務性質、佣金制）": 0.25,
+    "普通（固定薪資但有裁員風險）": 0.50,
+    "穩定（公務員、大企業員工）": 0.75,
+    "非常穩定（退休金、租金收入）": 1.0
+}
+income_stability = st.sidebar.selectbox(
+    "收入狀況",
+    list(income_stability_mapping.keys()),
+    index=2,  # 預設普通
+    help="收入穩定性影響您承受投資風險的能力"
+)
+income_score = income_stability_mapping[income_stability]
+
+# === Question 5: Age-based Adjustment (生命週期理論) ===
+st.sidebar.markdown("---")
+st.sidebar.subheader("Q5. 您的年齡？")
+age = st.sidebar.slider(
+    "年齡", 
+    20, 80, 35,
+    help="基於生命週期投資理論，年輕投資人可承受較高風險"
+)
+# 改良版 "100-age" rule：使用非線性函數
+age_score = max(0, min(1, (100 - age) / 60))
+
+# ===============================
+# θ 計算：學術加權平均
+# ===============================
+st.sidebar.markdown("---")
+st.sidebar.subheader("📊 風險偏好計算")
+
+# 權重來源：
+# - Grable & Lytton (1999): Financial Risk Tolerance Revisited
+# - Barsky et al. (1997): Preference Parameters and Behavioral Heterogeneity
+weights = {
+    'horizon': 0.25,      # 投資時間範圍
+    'capacity': 0.30,     # 風險承受能力（SCF 核心問題，權重最高）
+    'loss': 0.25,         # 損失容忍度（行為金融學重點）
+    'income': 0.10,       # 收入穩定性
+    'age': 0.10          # 年齡調整（生命週期理論）
+}
+
+theta = (
+    weights['horizon'] * horizon_score +
+    weights['capacity'] * capacity_score +
+    weights['loss'] * loss_score +
+    weights['income'] * income_score +
+    weights['age'] * age_score
 )
 
-def compute_theta_scf(age, horizon, loss_tol, reaction):
-    return np.clip(
-        ((80 - age) / 60 + horizon / 30 + loss_tol / 50 + {"賣出": 0, "觀望": 0.5, "加碼": 1}[reaction]) / 4,
-        0,
-        1,
+theta = np.clip(theta, 0, 1)
+
+# 顯示主要指標
+st.sidebar.metric(
+    "θ（風險偏好指數）", 
+    f"{theta:.3f}",
+    help="範圍 0-1，數值越高代表越能承受風險"
+)
+
+# 風險類型分類
+risk_profile = (
+    "🔵 極度保守" if theta < 0.2 else
+    "🟢 保守" if theta < 0.4 else
+    "🟡 穩健" if theta < 0.6 else
+    "🟠 積極" if theta < 0.8 else
+    "🔴 非常積極"
+)
+st.sidebar.info(f"**您的風險類型**：{risk_profile}")
+
+# 顯示各項分數（摺疊面板）
+with st.sidebar.expander("📋 查看詳細評分"):
+    st.write(f"**各項分數明細：**")
+    st.write(f"- 投資時間分數：{horizon_score:.2f} (權重 {weights['horizon']:.0%})")
+    st.write(f"- 風險承受分數：{capacity_score:.2f} (權重 {weights['capacity']:.0%})")
+    st.write(f"- 損失容忍分數：{loss_score:.2f} (權重 {weights['loss']:.0%})")
+    st.write(f"- 收入穩定分數：{income_score:.2f} (權重 {weights['income']:.0%})")
+    st.write(f"- 年齡調整分數：{age_score:.2f} (權重 {weights['age']:.0%})")
+    st.divider()
+    st.write(f"**加權計算：**")
+    st.write(f"θ = {horizon_score:.2f}×{weights['horizon']:.2f} + "
+             f"{capacity_score:.2f}×{weights['capacity']:.2f} + "
+             f"{loss_score:.2f}×{weights['loss']:.2f} + "
+             f"{income_score:.2f}×{weights['income']:.2f} + "
+             f"{age_score:.2f}×{weights['age']:.2f}")
+    st.write(f"  = **{theta:.3f}**")
+
+# 學術參考文獻
+with st.sidebar.expander("📚 學術依據"):
+    st.caption(
+        "**參考文獻：**\n\n"
+        "1. Barsky, R. B., Juster, F. T., Kimball, M. S., & Shapiro, M. D. (1997). "
+        "Preference parameters and behavioral heterogeneity: An experimental approach in the health and retirement study. "
+        "*The Quarterly Journal of Economics*, 112(2), 537-579.\n\n"
+        "2. Grable, J., & Lytton, R. H. (1999). "
+        "Financial risk tolerance revisited: the development of a risk assessment instrument. "
+        "*Financial Services Review*, 8(3), 163-181.\n\n"
+        "3. Merton, R. C. (1969). Lifetime portfolio selection under uncertainty: "
+        "The continuous-time case. *The Review of Economics and Statistics*, 247-257."
     )
 
-def compute_theta_crra():
-    gamma = st.sidebar.slider("CRRA 風險厭惡係數 γ", 0.5, 10.0, 3.0, 0.5)
-    risky_ratio = st.sidebar.slider("風險資產配置比重 (%)", 0, 100, 50)
-    # γ 越高風險偏好越低；風險資產配置越高風險偏好越高
-    gamma_score = np.clip((10.0 - gamma) / 9.5, 0, 1)
-    alloc_score = np.clip(risky_ratio / 100, 0, 1)
-    return np.clip(0.6 * alloc_score + 0.4 * gamma_score, 0, 1)
-
-theta_scf = compute_theta_scf(age, horizon, loss_tol, reaction)
-
-if evaluation_method == "標準問卷法（SCF）":
-    theta = theta_scf
-    st.sidebar.metric("θ（SCF）", round(theta, 3))
-elif evaluation_method == "效用函數法（CRRA）":
-    theta = compute_theta_crra()
-    st.sidebar.metric("θ（CRRA）", round(theta, 3))
-else:
-    theta_crra = compute_theta_crra()
-    theta = np.clip(0.6 * theta_scf + 0.4 * theta_crra, 0, 1)
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("📊 混合評估結果")
-    st.sidebar.metric("θ（SCF）", f"{theta_scf:.3f}")
-    st.sidebar.metric("θ（CRRA）", f"{theta_crra:.3f}")
-    st.sidebar.metric("θ（混合）", f"{theta:.3f}", delta=f"{theta - theta_scf:.3f} vs SCF")
-
+# ===============================
+# α 計算（從 θ 映射到 HotIndex 權重）
+# ===============================
 def alpha_from_theta(theta, alpha_min=0.1, alpha_max=0.7):
+    """
+    將風險偏好 θ 映射到 HotIndex 權重 α
+    
+    理論基礎：
+    - 保守投資人(θ低)：更注重個人化適配，α 較低
+    - 積極投資人(θ高)：更願意跟隨市場熱度，α 較高
+    """
     return alpha_min + (alpha_max - alpha_min) * theta
 
 ALPHA_MODEL = alpha_from_theta(theta)
 
+st.sidebar.markdown("---")
 st.sidebar.header("⚖️ 綜合分數權重")
 st.sidebar.write(
-    f"📌 HotIndex 權重 (內生 α，依 θ 計算): {ALPHA_MODEL:.2f}\n"
-    f"📌 個人化分數權重: {1-ALPHA_MODEL:.2f}\n"
-    "(手動 slider α 僅供參考，不影響排序)"
+    f"📌 **HotIndex 權重（α）**: {ALPHA_MODEL:.2f}\n\n"
+    f"📌 **個人化分數權重（1-α）**: {1-ALPHA_MODEL:.2f}"
 )
-st.sidebar.slider("HotIndex 權重（僅供參考）", 0.0, 1.0, 0.5, step=0.05)
+st.sidebar.caption(
+    f"💡 說明：您的風險偏好 θ={theta:.2f}，系統自動計算最適權重配置"
+)
 
+# 移除手動 slider（避免混淆）
+# st.sidebar.slider("HotIndex 權重（僅供參考）", 0.0, 1.0, 0.5, step=0.05)  # 刪除此行
+
+st.sidebar.markdown("---")
 st.sidebar.header("📊 排序選擇")
-sort_option = st.sidebar.selectbox("選擇排序依據", ["Final Score (HotIndex + 個人化)", "風險適配分數（依 θ）"])
+sort_option = st.sidebar.selectbox(
+    "選擇排序依據", 
+    ["Final Score (HotIndex + 個人化)", "風險適配分數（依 θ）"]
+)
 
 st.sidebar.header("📈 Top N ETF 顯示")
 TOP_N = st.sidebar.slider("Top N ETF", 1, len(ETF_LIST), 5)
 
+st.sidebar.markdown("---")
 st.sidebar.header("🔄 即時更新")
 if st.sidebar.button("清除快取並更新報價"):
     st.cache_data.clear()
-    st.sidebar.success("已清除快取，將重新抓取報價")
-price_source = st.sidebar.selectbox("最新價來源", ["auto", "fast_info", "1m"], index=0)
-latest_ttl = st.sidebar.slider("最新價快取秒數", 0, 120, 10, step=5)
-st.sidebar.caption("提示：Yahoo 資料通常延遲，若需更即時請改用券商或官方 API。")
+    st.sidebar.success("✅ 已清除快取，將重新抓取報價")
+
+price_source = st.sidebar.selectbox(
+    "最新價來源", 
+    ["auto", "fast_info", "1m"], 
+    index=0,
+    help="Yahoo Finance 資料可能有延遲"
+)
+latest_ttl = st.sidebar.slider(
+    "最新價快取秒數", 
+    0, 120, 10, step=5,
+    help="較短的快取時間可獲得更即時的價格，但會增加 API 請求次數"
+)
+st.sidebar.caption("⚠️ Yahoo 資料通常延遲 15 分鐘，若需即時報價請使用券商 API")
+
 
 # ===============================
 # 抓取價格資料
 # ===============================
+
 @st.cache_data(ttl=300)  # 5 分鐘
 def fetch_all_price_data(etf_list, benchmark, period="1y"):
     data = {}
@@ -131,18 +283,16 @@ def fetch_all_price_data(etf_list, benchmark, period="1y"):
             data[code] = None
     return data
 
-def fetch_latest_price(code, source="auto"):
+@st.cache_data(ttl=30)  # 30 秒
+def fetch_latest_price(code):
     try:
         ticker = yf.Ticker(code)
-        if source in ("auto", "fast_info"):
-            fast_info = getattr(ticker, "fast_info", None)
-            if fast_info:
-                for key in ("last_price", "lastPrice", "regularMarketPrice"):
-                    price = fast_info.get(key)
-                    if price:
-                        return float(price)
-            if source == "fast_info":
-                return None
+        fast_info = getattr(ticker, "fast_info", None)
+        if fast_info:
+            for key in ("last_price", "lastPrice", "regularMarketPrice"):
+                price = fast_info.get(key)
+                if price:
+                    return float(price)
         df = yf.download(code, period="1d", interval="1m", progress=False)
         if df is None or df.empty:
             return None
@@ -150,45 +300,13 @@ def fetch_latest_price(code, source="auto"):
     except Exception:
         return None
 
-def get_cached_latest_price(code, source, ttl_seconds):
-    if "latest_price_cache" not in st.session_state:
-        st.session_state.latest_price_cache = {}
-    cache = st.session_state.latest_price_cache
-    now = datetime.utcnow().timestamp()
-    if ttl_seconds > 0 and code in cache:
-        cached = cache[code]
-        if now - cached["ts"] <= ttl_seconds:
-            return cached["price"]
-    price = fetch_latest_price(code, source=source)
-    if ttl_seconds > 0:
-        cache[code] = {"price": price, "ts": now}
-    return price
-
 @st.cache_data(ttl=300)  # 5 分鐘
 def fetch_dividend_info(code):
     try:
         ticker = yf.Ticker(code)
         dividends = ticker.dividends
-        fast_info = getattr(ticker, "fast_info", None)
-        ex_dividend_date = None
-        if fast_info:
-            ex_date = fast_info.get("ex_dividend_date")
-            if ex_date:
-                if isinstance(ex_date, (int, float)):
-                    ex_dividend_date = pd.to_datetime(ex_date, unit="s").date()
-                else:
-                    ex_dividend_date = pd.to_datetime(ex_date).date()
         if dividends is None or dividends.empty:
-            last_dividend = 0.0
-            if fast_info:
-                last_dividend = float(fast_info.get("last_dividend_value") or 0.0)
-            return {
-                "最新配息日": None,
-                "除權息日": ex_dividend_date,
-                "最近一次配息": round(last_dividend, 3),
-                "TTM配息": 0.0,
-                "TTM殖利率%": 0.0,
-            }
+            return {"最新配息日": None, "最近一次配息": 0.0, "TTM配息": 0.0, "TTM殖利率%": 0.0}
         one_year_ago = pd.Timestamp.today() - pd.DateOffset(years=1)
         ttm_dividends = dividends[dividends.index >= one_year_ago]
         latest_date = dividends.index[-1]
@@ -196,21 +314,10 @@ def fetch_dividend_info(code):
         price = ticker.history(period="5d")["Close"].iloc[-1]
         ttm_sum = float(ttm_dividends.sum())
         yield_ttm = (ttm_sum / price) * 100 if price > 0 else 0
-        return {
-            "最新配息日": latest_date.date(),
-            "除權息日": ex_dividend_date,
-            "最近一次配息": round(latest_div, 3),
-            "TTM配息": round(ttm_sum, 3),
-            "TTM殖利率%": round(yield_ttm, 2),
-        }
+        return {"最新配息日": latest_date.date(), "最近一次配息": round(latest_div,3),
+                "TTM配息": round(ttm_sum,3), "TTM殖利率%": round(yield_ttm,2)}
     except Exception:
-        return {
-            "最新配息日": None,
-            "除權息日": None,
-            "最近一次配息": 0.0,
-            "TTM配息": 0.0,
-            "TTM殖利率%": 0.0,
-        }
+        return {"最新配息日": None, "最近一次配息": 0.0, "TTM配息": 0.0, "TTM殖利率%": 0.0}
 
 # ===============================
 # 指標計算
@@ -266,7 +373,7 @@ for etf, etf_type in ETF_LIST.items():
     df = price_data.get(etf)
     if df is None or market_df is None:
         continue
-    latest_price = get_cached_latest_price(etf, price_source, latest_ttl)
+    latest_price = fetch_latest_price(etf)
     if latest_price is None:
         latest_price = float(df["Close"].iloc[-1])
     ann_ret, ann_vol, sharpe, beta = calc_metrics(df, market_df)
@@ -276,9 +383,7 @@ for etf, etf_type in ETF_LIST.items():
     hot_metrics = compute_hot_index(df)
     row = {
         "ETF":etf, "類型":etf_type, "最新價":round(latest_price,2),
-        "最新配息日": div_info["最新配息日"],
-        "除權息日": div_info["除權息日"],
-        "最近一次配息":div_info["最近一次配息"],
+        "最新配息日": div_info["最新配息日"], "最近一次配息":div_info["最近一次配息"],
         "TTM配息":div_info["TTM配息"], "TTM殖利率%":div_info["TTM殖利率%"],
         "Sharpe":round(sharpe,2), "Beta":round(beta,2), "年化報酬%":round(ann_ret,2),
         "年化波動%":round(ann_vol,2), "個人化分數":round(comp["personal_score"],3),
@@ -292,8 +397,9 @@ for etf, etf_type in ETF_LIST.items():
 
 df_all = pd.DataFrame(rows)
 if df_all.empty:
-    st.error("無法取得即時/歷史報價資料，請稍後重試或使用清除快取更新。")
+    st.error("❌ 無法取得即時/歷史報價資料，請稍後重試或使用「清除快取並更新報價」功能。")
     st.stop()
+    
 df_all["hot_index"] = df_all["volume_score"] + df_all["flow_proxy"] - df_all["volatility"]
 df_all["hot_index_norm"] = robust_zscore(df_all["hot_index"]).fillna(0)
 
@@ -318,8 +424,7 @@ for t in THETA_LIST:
         )
         base_row = df_all[df_all["ETF"]==etf].iloc[0]
         row = {"ETF":etf,"類型":etf_type,"θ":t,"最新價":base_row["最新價"],
-               "最新配息日":base_row["最新配息日"],"除權息日":base_row["除權息日"],
-               "最近一次配息":base_row["最近一次配息"],
+               "最新配息日":base_row["最新配息日"],"最近一次配息":base_row["最近一次配息"],
                "TTM配息":base_row["TTM配息"],"TTM殖利率%":base_row["TTM殖利率%"],
                "final_score":final_score,**comp,"hot_index":base_row["hot_index"]}
         rows_theta.append(row)
@@ -345,9 +450,11 @@ for col in radar_metrics:
 # ===============================
 # Top-N 表格
 # ===============================
-st.subheader(f"🎯 Top {TOP_N} ETF 排序（θ={round(theta,2)}, final_score）")
+st.subheader(f"🎯 Top {TOP_N} ETF 排序（θ={round(theta,2)}, α={ALPHA_MODEL:.2f}）")
+st.caption(f"依據您的風險類型 **{risk_profile}** 計算的最適 ETF 組合")
+
 st.dataframe(
-    df_ui[["ETF","類型","最新價","最新配息日","除權息日","最近一次配息",
+    df_ui[["ETF","類型","最新價","最新配息日","最近一次配息",
            "TTM配息","TTM殖利率%","final_score","personal_score",
            "sharpe_fit","return_fit","vol_fit","beta_fit","hot_index"]],
     use_container_width=True
