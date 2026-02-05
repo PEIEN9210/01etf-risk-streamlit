@@ -14,8 +14,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime, timedelta
-from scipy.stats import spearmanr
+from datetime import datetime
 import plotly.graph_objects as go
 import altair as alt
 
@@ -51,9 +50,43 @@ horizon = st.sidebar.slider("投資年限（年）", 1, 30, 10)
 loss_tol = st.sidebar.slider("可接受最大損失 (%)", 0, 50, 20)
 reaction = st.sidebar.radio("市場下跌 20% 時", ["賣出", "觀望", "加碼"])
 
-theta = ((80 - age)/60 + horizon/30 + loss_tol/50 + {"賣出":0,"觀望":0.5,"加碼":1}[reaction])/4
-theta = np.clip(theta, 0, 1)
-st.sidebar.metric("θ（風險偏好指數）", round(theta, 2))
+st.sidebar.header("👤 風險偏好評估（學術標準版）")
+evaluation_method = st.sidebar.radio(
+    "選擇評估方法",
+    ["標準問卷法（SCF）", "效用函數法（CRRA）", "混合法（推薦）"]
+)
+
+def compute_theta_scf(age, horizon, loss_tol, reaction):
+    return np.clip(
+        ((80 - age) / 60 + horizon / 30 + loss_tol / 50 + {"賣出": 0, "觀望": 0.5, "加碼": 1}[reaction]) / 4,
+        0,
+        1,
+    )
+
+def compute_theta_crra():
+    gamma = st.sidebar.slider("CRRA 風險厭惡係數 γ", 0.5, 10.0, 3.0, 0.5)
+    risky_ratio = st.sidebar.slider("風險資產配置比重 (%)", 0, 100, 50)
+    # γ 越高風險偏好越低；風險資產配置越高風險偏好越高
+    gamma_score = np.clip((10.0 - gamma) / 9.5, 0, 1)
+    alloc_score = np.clip(risky_ratio / 100, 0, 1)
+    return np.clip(0.6 * alloc_score + 0.4 * gamma_score, 0, 1)
+
+theta_scf = compute_theta_scf(age, horizon, loss_tol, reaction)
+
+if evaluation_method == "標準問卷法（SCF）":
+    theta = theta_scf
+    st.sidebar.metric("θ（SCF）", round(theta, 3))
+elif evaluation_method == "效用函數法（CRRA）":
+    theta = compute_theta_crra()
+    st.sidebar.metric("θ（CRRA）", round(theta, 3))
+else:
+    theta_crra = compute_theta_crra()
+    theta = np.clip(0.6 * theta_scf + 0.4 * theta_crra, 0, 1)
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📊 混合評估結果")
+    st.sidebar.metric("θ（SCF）", f"{theta_scf:.3f}")
+    st.sidebar.metric("θ（CRRA）", f"{theta_crra:.3f}")
+    st.sidebar.metric("θ（混合）", f"{theta:.3f}", delta=f"{theta - theta_scf:.3f} vs SCF")
 
 def alpha_from_theta(theta, alpha_min=0.1, alpha_max=0.7):
     return alpha_min + (alpha_max - alpha_min) * theta
@@ -82,11 +115,9 @@ price_source = st.sidebar.selectbox("最新價來源", ["auto", "fast_info", "1m
 latest_ttl = st.sidebar.slider("最新價快取秒數", 0, 120, 10, step=5)
 st.sidebar.caption("提示：Yahoo 資料通常延遲，若需更即時請改用券商或官方 API。")
 
-
 # ===============================
 # 抓取價格資料
 # ===============================
-
 @st.cache_data(ttl=300)  # 5 分鐘
 def fetch_all_price_data(etf_list, benchmark, period="1y"):
     data = {}
@@ -100,16 +131,18 @@ def fetch_all_price_data(etf_list, benchmark, period="1y"):
             data[code] = None
     return data
 
-@st.cache_data(ttl=30)  # 30 秒
-def fetch_latest_price(code):
+def fetch_latest_price(code, source="auto"):
     try:
         ticker = yf.Ticker(code)
-        fast_info = getattr(ticker, "fast_info", None)
-        if fast_info:
-            for key in ("last_price", "lastPrice", "regularMarketPrice"):
-                price = fast_info.get(key)
-                if price:
-                    return float(price)
+        if source in ("auto", "fast_info"):
+            fast_info = getattr(ticker, "fast_info", None)
+            if fast_info:
+                for key in ("last_price", "lastPrice", "regularMarketPrice"):
+                    price = fast_info.get(key)
+                    if price:
+                        return float(price)
+            if source == "fast_info":
+                return None
         df = yf.download(code, period="1d", interval="1m", progress=False)
         if df is None or df.empty:
             return None
@@ -117,13 +150,45 @@ def fetch_latest_price(code):
     except Exception:
         return None
 
+def get_cached_latest_price(code, source, ttl_seconds):
+    if "latest_price_cache" not in st.session_state:
+        st.session_state.latest_price_cache = {}
+    cache = st.session_state.latest_price_cache
+    now = datetime.utcnow().timestamp()
+    if ttl_seconds > 0 and code in cache:
+        cached = cache[code]
+        if now - cached["ts"] <= ttl_seconds:
+            return cached["price"]
+    price = fetch_latest_price(code, source=source)
+    if ttl_seconds > 0:
+        cache[code] = {"price": price, "ts": now}
+    return price
+
 @st.cache_data(ttl=300)  # 5 分鐘
 def fetch_dividend_info(code):
     try:
         ticker = yf.Ticker(code)
         dividends = ticker.dividends
+        fast_info = getattr(ticker, "fast_info", None)
+        ex_dividend_date = None
+        if fast_info:
+            ex_date = fast_info.get("ex_dividend_date")
+            if ex_date:
+                if isinstance(ex_date, (int, float)):
+                    ex_dividend_date = pd.to_datetime(ex_date, unit="s").date()
+                else:
+                    ex_dividend_date = pd.to_datetime(ex_date).date()
         if dividends is None or dividends.empty:
-            return {"最新配息日": None, "最近一次配息": 0.0, "TTM配息": 0.0, "TTM殖利率%": 0.0}
+            last_dividend = 0.0
+            if fast_info:
+                last_dividend = float(fast_info.get("last_dividend_value") or 0.0)
+            return {
+                "最新配息日": None,
+                "除權息日": ex_dividend_date,
+                "最近一次配息": round(last_dividend, 3),
+                "TTM配息": 0.0,
+                "TTM殖利率%": 0.0,
+            }
         one_year_ago = pd.Timestamp.today() - pd.DateOffset(years=1)
         ttm_dividends = dividends[dividends.index >= one_year_ago]
         latest_date = dividends.index[-1]
@@ -131,10 +196,21 @@ def fetch_dividend_info(code):
         price = ticker.history(period="5d")["Close"].iloc[-1]
         ttm_sum = float(ttm_dividends.sum())
         yield_ttm = (ttm_sum / price) * 100 if price > 0 else 0
-        return {"最新配息日": latest_date.date(), "最近一次配息": round(latest_div,3),
-                "TTM配息": round(ttm_sum,3), "TTM殖利率%": round(yield_ttm,2)}
+        return {
+            "最新配息日": latest_date.date(),
+            "除權息日": ex_dividend_date,
+            "最近一次配息": round(latest_div, 3),
+            "TTM配息": round(ttm_sum, 3),
+            "TTM殖利率%": round(yield_ttm, 2),
+        }
     except Exception:
-        return {"最新配息日": None, "最近一次配息": 0.0, "TTM配息": 0.0, "TTM殖利率%": 0.0}
+        return {
+            "最新配息日": None,
+            "除權息日": None,
+            "最近一次配息": 0.0,
+            "TTM配息": 0.0,
+            "TTM殖利率%": 0.0,
+        }
 
 # ===============================
 # 指標計算
@@ -190,7 +266,7 @@ for etf, etf_type in ETF_LIST.items():
     df = price_data.get(etf)
     if df is None or market_df is None:
         continue
-    latest_price = fetch_latest_price(etf)
+    latest_price = get_cached_latest_price(etf, price_source, latest_ttl)
     if latest_price is None:
         latest_price = float(df["Close"].iloc[-1])
     ann_ret, ann_vol, sharpe, beta = calc_metrics(df, market_df)
@@ -200,7 +276,9 @@ for etf, etf_type in ETF_LIST.items():
     hot_metrics = compute_hot_index(df)
     row = {
         "ETF":etf, "類型":etf_type, "最新價":round(latest_price,2),
-        "最新配息日": div_info["最新配息日"], "最近一次配息":div_info["最近一次配息"],
+        "最新配息日": div_info["最新配息日"],
+        "除權息日": div_info["除權息日"],
+        "最近一次配息":div_info["最近一次配息"],
         "TTM配息":div_info["TTM配息"], "TTM殖利率%":div_info["TTM殖利率%"],
         "Sharpe":round(sharpe,2), "Beta":round(beta,2), "年化報酬%":round(ann_ret,2),
         "年化波動%":round(ann_vol,2), "個人化分數":round(comp["personal_score"],3),
@@ -240,7 +318,8 @@ for t in THETA_LIST:
         )
         base_row = df_all[df_all["ETF"]==etf].iloc[0]
         row = {"ETF":etf,"類型":etf_type,"θ":t,"最新價":base_row["最新價"],
-               "最新配息日":base_row["最新配息日"],"最近一次配息":base_row["最近一次配息"],
+               "最新配息日":base_row["最新配息日"],"除權息日":base_row["除權息日"],
+               "最近一次配息":base_row["最近一次配息"],
                "TTM配息":base_row["TTM配息"],"TTM殖利率%":base_row["TTM殖利率%"],
                "final_score":final_score,**comp,"hot_index":base_row["hot_index"]}
         rows_theta.append(row)
@@ -268,7 +347,7 @@ for col in radar_metrics:
 # ===============================
 st.subheader(f"🎯 Top {TOP_N} ETF 排序（θ={round(theta,2)}, final_score）")
 st.dataframe(
-    df_ui[["ETF","類型","最新價","最新配息日","最近一次配息",
+    df_ui[["ETF","類型","最新價","最新配息日","除權息日","最近一次配息",
            "TTM配息","TTM殖利率%","final_score","personal_score",
            "sharpe_fit","return_fit","vol_fit","beta_fit","hot_index"]],
     use_container_width=True
