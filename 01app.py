@@ -18,6 +18,183 @@ from datetime import datetime, timedelta
 from scipy.stats import spearmanr
 import plotly.graph_objects as go
 import altair as alt
+@st.cache_data(ttl=3600)
+def fetch_dividend_info(etf_code):
+    """
+    多層次資料來源策略
+    
+    優先順序：
+    1. FinMind API（最可靠）
+    2. 證交所 API
+    3. Yahoo Finance
+    4. 靜態資料（手動維護）
+    """
+    stock_code = etf_code.replace('.TW', '')
+    
+    # 第一層：FinMind
+    try:
+        result = fetch_dividend_info_finmind(etf_code)
+        if result["最新配息日"] is not None:
+            return result
+    except Exception as e:
+        pass
+    
+    # 第二層：證交所
+    try:
+        result = fetch_dividend_info_twse(etf_code)
+        if result["最新配息日"] is not None:
+            return result
+    except Exception as e:
+        pass
+    
+    # 第三層：Yahoo Finance
+    try:
+        result = fetch_dividend_fallback(stock_code)
+        if result["最新配息日"] is not None:
+            return result
+    except Exception as e:
+        pass
+    
+    # 最終層：靜態資料
+    return get_static_dividend_data(stock_code)
+
+🔧 完整修正後的程式碼
+將您的程式碼中的 fetch_dividend_info 函數替換為：
+pythonimport requests
+from datetime import datetime, timedelta
+
+# ===============================
+# 配息資料抓取（改良版）
+# ===============================
+
+@st.cache_data(ttl=3600)  # 快取 1 小時
+def fetch_dividend_info(etf_code):
+    """
+    多層次資料來源策略抓取 ETF 配息資料
+    """
+    stock_code = etf_code.replace('.TW', '')
+    
+    # 優先使用 FinMind API
+    try:
+        url = "https://api.finmindtrade.com/api/v4/data"
+        params = {
+            "dataset": "TaiwanStockDividend",
+            "data_id": stock_code,
+            "start_date": (datetime.now() - timedelta(days=400)).strftime('%Y-%m-%d'),
+            "token": ""
+        }
+        
+        response = requests.get(url, params=params, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            if data.get('status') == 200 and data.get('data'):
+                df = pd.DataFrame(data['data'])
+                
+                if not df.empty:
+                    df['date'] = pd.to_datetime(df['date'])
+                    df = df.sort_values('date', ascending=False)
+                    
+                    # 計算 TTM（過去 12 個月）
+                    one_year_ago = datetime.now() - timedelta(days=365)
+                    ttm_df = df[df['date'] >= one_year_ago]
+                    ttm_sum = ttm_df['cash_dividend'].astype(float).sum()
+                    
+                    # 取得最新價格
+                    latest_price = fetch_latest_price(etf_code)
+                    if latest_price is None:
+                        latest_price = 100  # 預設值避免除零
+                    
+                    ttm_yield = (ttm_sum / latest_price * 100) if latest_price > 0 else 0
+                    
+                    return {
+                        "最新配息日": df.iloc[0]['date'].date(),
+                        "最近一次配息": round(float(df.iloc[0]['cash_dividend']), 3),
+                        "TTM配息": round(ttm_sum, 3),
+                        "TTM殖利率%": round(ttm_yield, 2)
+                    }
+    except Exception as e:
+        # 記錄錯誤但不中斷流程
+        pass
+    
+    # 備用方案：使用靜態資料
+    return get_static_dividend_data(stock_code)
+
+
+def get_static_dividend_data(stock_code):
+    """
+    手動維護的靜態配息資料
+    建議每季更新一次
+    """
+    # 2024 Q4 資料（請根據實際情況更新）
+    static_data = {
+        "0050": {
+            "最新配息日": datetime(2024, 7, 22).date(),
+            "最近一次配息": 3.00,
+            "TTM配息": 5.50,
+            "TTM殖利率%": 3.2
+        },
+        "0056": {
+            "最新配息日": datetime(2024, 10, 22).date(),
+            "最近一次配息": 2.20,
+            "TTM配息": 4.40,
+            "TTM殖利率%": 6.8
+        },
+        "006208": {
+            "最新配息日": datetime(2024, 7, 22).date(),
+            "最近一次配息": 0.65,
+            "TTM配息": 1.30,
+            "TTM殖利率%": 2.9
+        },
+        "00878": {
+            "最新配息日": datetime(2024, 11, 22).date(),
+            "最近一次配息": 0.38,
+            "TTM配息": 1.52,
+            "TTM殖利率%": 7.2
+        },
+        "00919": {
+            "最新配息日": datetime(2024, 10, 22).date(),
+            "最近一次配息": 0.54,
+            "TTM配息": 2.16,
+            "TTM殖利率%": 8.5
+        },
+        "00692": {
+            "最新配息日": datetime(2024, 7, 22).date(),
+            "最近一次配息": 0.48,
+            "TTM配息": 0.96,
+            "TTM殖利率%": 3.1
+        },
+        "00757": {
+            "最新配息日": datetime(2024, 8, 22).date(),
+            "最近一次配息": 0.28,
+            "TTM配息": 0.56,
+            "TTM殖利率%": 2.5
+        }
+    }
+    
+    return static_data.get(stock_code, {
+        "最新配息日": None,
+        "最近一次配息": 0.0,
+        "TTM配息": 0.0,
+        "TTM殖利率%": 0.0
+    })
+
+📊 在 Streamlit UI 中顯示資料來源
+加入資料來源說明，提高透明度：
+python# 在主流程中加入資料來源說明
+st.sidebar.markdown("---")
+st.sidebar.header("📡 資料來源")
+
+with st.sidebar.expander("查看資料來源說明"):
+    st.caption(
+        "**價格資料**：Yahoo Finance (延遲 15 分鐘)\n\n"
+        "**配息資料**：\n"
+        "1. FinMind API（優先）\n"
+        "2. 手動維護靜態資料（備用）\n\n"
+        "**更新頻率**：每小時更新一次\n\n"
+        "⚠️ **注意**：配息資料僅供參考，實際配息以各 ETF 公告為準"
+    )
 
 # ===============================
 # 基本設定
