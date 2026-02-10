@@ -10,7 +10,7 @@ Original file is located at
 # app.py
 # -*- coding: utf-8 -*-
 """
-台灣 ETF 個人化推薦系統 - 安全強化版 (v2.1)
+台灣 ETF 個人化推薦系統 - 安全強化完整版 (v2.2)
 ===========================================
 分析者：哈佛與渥頓商學院財經與資工教授團隊
 修正重點：
@@ -68,7 +68,7 @@ class SecurityEngine:
     def safe_get(url, params=None, timeout=10):
         """安全的 HTTP 請求，強化 SSL 與異常處理"""
         try:
-            headers = {'User-Agent': 'ETF-Research-System/2.1 (Academic Use)'}
+            headers = {'User-Agent': 'ETF-Research-System/2.2 (Academic Use)'}
             response = requests.get(url, params=params, timeout=timeout, verify=True, headers=headers)
             response.raise_for_status()
             return response
@@ -235,13 +235,11 @@ def fetch_all_price_data(etf_list, benchmark, period="1y"):
 def fetch_latest_price(code):
     try:
         ticker = yf.Ticker(code)
-        # 優先使用 fast_info
         fast_info = getattr(ticker, "fast_info", None)
         if fast_info:
             for key in ("last_price", "lastPrice", "regularMarketPrice"):
                 p = fast_info.get(key)
                 if p and p > 0: return float(p)
-        # 備援：歷史資料
         hist = ticker.history(period="5d")
         return float(hist['Close'].iloc[-1]) if not hist.empty else None
     except:
@@ -260,35 +258,22 @@ def get_price_from_finmind(stock_code):
 @st.cache_data(ttl=7200)
 def fetch_dividend_info(etf_code):
     stock_code = etf_code.replace('.TW', '')
-    # 預設靜態資料 (作為備援)
     static_data = {
         "0050": {"最新配息日": "2024-07-22", "最近一次配息": 3.0, "TTM配息": 5.5, "TTM殖利率%": 3.2},
         "0056": {"最新配息日": "2025-01-22", "最近一次配息": 2.0, "TTM配息": 4.2, "TTM殖利率%": 6.5},
         "00878": {"最新配息日": "2024-11-22", "最近一次配息": 0.38, "TTM配息": 1.52, "TTM殖利率%": 7.2},
         "00919": {"最新配息日": "2025-01-22", "最近一次配息": 0.62, "TTM配息": 2.32, "TTM殖利率%": 9.1},
     }
-    
-    # 嘗試從 FinMind 抓取
     url = "https://api.finmindtrade.com/api/v4/data"
     params = {"dataset": "TaiwanStockDividend", "data_id": stock_code, "start_date": (datetime.now() - timedelta(days=400)).strftime('%Y-%m-%d'), "token": ""}
     res = SecurityEngine.safe_get(url, params)
-    
     if res:
         data = res.json()
         if data.get('status') == 200 and data.get('data'):
             df = pd.DataFrame(data['data'])
-            # 簡化計算邏輯 (保持原邏輯)
             ttm_sum = df['cash_dividend'].tail(4).sum() if 'cash_dividend' in df.columns else 0
             latest_p = fetch_latest_price(etf_code) or 100
-            return {
-                "最新配息日": df.iloc[-1].get('date', 'N/A'),
-                "最近一次配息": float(df.iloc[-1].get('cash_dividend', 0)),
-                "TTM配息": float(ttm_sum),
-                "TTM殖利率%": round((ttm_sum / latest_p) * 100, 2),
-                "資料來源": "FinMind"
-            }
-    
-    # 返回靜態或預設
+            return {"最新配息日": df.iloc[-1].get('date', 'N/A'), "最近一次配息": float(df.iloc[-1].get('cash_dividend', 0)), "TTM配息": float(ttm_sum), "TTM殖利率%": round((ttm_sum / latest_p) * 100, 2), "資料來源": "FinMind"}
     base = static_data.get(stock_code, {"最新配息日": "N/A", "最近一次配息": 0.0, "TTM配息": 0.0, "TTM殖利率%": 0.0})
     base["資料來源"] = "靜態資料"
     return base
@@ -302,7 +287,6 @@ def calc_metrics(df, market_df):
     mr = market_df["Close"].pct_change().dropna()
     idx = r.index.intersection(mr.index)
     r, mr = r.loc[idx], mr.loc[idx]
-    
     ann_ret = r.mean() * TRADING_DAYS
     ann_vol = r.std() * np.sqrt(TRADING_DAYS)
     sharpe = (ann_ret - RISK_FREE_RATE) / ann_vol if ann_vol > 0 else 0
@@ -313,21 +297,17 @@ def compute_hot_index(df, window=20):
     returns = df["Close"].pct_change()
     vol_score = (df["Volume"].rolling(window).mean().iloc[-1] - df["Volume"].mean()) / df["Volume"].std()
     mom_score = returns.rolling(window).sum().iloc[-1] * 100
-    # 保持原權重邏輯
     hot_index = 0.4 * vol_score + 0.6 * mom_score
     return {"hot_index": hot_index}
 
 def compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta):
-    # 保持原適配邏輯
     expected_ret = 6 + theta * 12
     acceptable_vol = 12 + theta * 15
     ideal_beta = 0.6 + theta * 0.6
-    
     sharpe_fit = min(max(sharpe, 0) / 2, 1)
     return_fit = 1.0 if ann_ret >= expected_ret else np.clip(ann_ret / expected_ret, 0, 1)
     vol_fit = 1.0 if ann_vol <= acceptable_vol else np.clip(acceptable_vol / ann_vol, 0, 1)
     beta_fit = np.clip(1 - abs(beta - ideal_beta) / ideal_beta, 0, 1) if ideal_beta > 0 else 0
-    
     score = 0.4 * sharpe_fit + 0.3 * return_fit + 0.2 * vol_fit + 0.1 * beta_fit
     return {"personal_score": score, "sharpe_fit": sharpe_fit, "return_fit": return_fit, "vol_fit": vol_fit, "beta_fit": beta_fit}
 
@@ -347,24 +327,16 @@ rows = []
 for etf, etf_type in ETF_LIST.items():
     df = price_data.get(etf)
     if df is None: continue
-    
-    # 1. 價格抓取與交叉驗證
     y_price = fetch_latest_price(etf)
     f_price = get_price_from_finmind(etf.replace('.TW', ''))
-    # 教授建議：若兩者差異 > 5%，發出警告
     if y_price and f_price and abs(y_price - f_price) / y_price > 0.05:
         st.warning(f"⚠️ {etf} 價格資料不一致 (Yahoo: {y_price}, FinMind: {f_price})")
     latest_price = y_price or f_price or float(df["Close"].iloc[-1])
-    
-    # 2. 指標計算與嚴格驗證
     ann_ret, ann_vol, sharpe, beta = calc_metrics(df, market_df)
     is_valid, issues = SecurityEngine.validate_financial_data(ann_ret, ann_vol, sharpe, beta, etf)
-    
-    # 3. 分數計算
     comp = compute_personalized_score(ann_ret, ann_vol, sharpe, beta, theta)
     hot = compute_hot_index(df)
     div = fetch_dividend_info(etf)
-    
     rows.append({
         "ETF": etf, "類型": etf_type, "最新價": latest_price,
         "年化報酬%": ann_ret, "年化波動%": ann_vol, "Sharpe": sharpe, "Beta": beta,
@@ -373,7 +345,6 @@ for etf, etf_type in ETF_LIST.items():
     })
 
 df_all = pd.DataFrame(rows)
-# 標準化 HotIndex (Robust Z-Score)
 med = df_all["hot_index_raw"].median()
 mad = np.median(np.abs(df_all["hot_index_raw"] - med))
 df_all["hot_index_norm"] = (df_all["hot_index_raw"] - med) / mad if mad != 0 else 0
@@ -383,10 +354,7 @@ df_all["final_score"] = ALPHA_MODEL * df_all["hot_index_norm"] + (1 - ALPHA_MODE
 # UI 顯示
 # ===============================
 st.subheader(f"🎯 Top {TOP_N} ETF 推薦結果")
-sort_map = {
-    "綜合分數": "final_score", "個人化分數": "個人化分數", "HotIndex 分數": "hot_index_norm",
-    "Sharpe Ratio": "Sharpe", "年化報酬率": "年化報酬%", "TTM 殖利率": "TTM殖利率%"
-}
+sort_map = {"綜合分數": "final_score", "個人化分數": "個人化分數", "HotIndex 分數": "hot_index_norm", "Sharpe Ratio": "Sharpe", "年化報酬率": "年化報酬%", "TTM 殖利率": "TTM殖利率%"}
 df_display = df_all.sort_values(sort_map[sort_option], ascending=False).head(TOP_N)
 
 st.dataframe(
@@ -395,14 +363,12 @@ st.dataframe(
     }), use_container_width=True
 )
 
-# 資料品質報告
 st.divider()
 col1, col2, col3 = st.columns(3)
 col1.metric("資料驗證通過率", f"{(df_all['資料有效'].sum()/len(df_all)*100):.0f}%")
 col2.metric("API 成功率", f"{(len(df_all[df_all['最新價'] > 0])/len(df_all)*100):.0f}%")
 col3.metric("風險偏好 (θ)", f"{theta:.3f}")
 
-# 圖表展示 (保持原視覺化邏輯)
 st.subheader("📈 績效分析圖")
 bubble = alt.Chart(df_display).mark_circle(size=600).encode(
     x=alt.X("年化報酬%:Q", title="年化報酬率 (%)"),
