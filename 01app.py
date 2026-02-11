@@ -493,6 +493,7 @@ class FinancialAnalyzer:
         beta_pvalue = p_value
         
         # === Sharpe Ratio ===
+        @@ -496,251 +496,281 @@ class FinancialAnalyzer:
         sharpe = (ann_return - RISK_FREE_RATE) / ann_volatility if ann_volatility > 0 else 0
         
         # Sharpe Ratio的統計檢驗（Jobson & Korkie, 1981）
@@ -520,6 +521,10 @@ class FinancialAnalyzer:
     @staticmethod
     def calculate_sortino_ratio(returns: pd.Series, 
                                target_return: float = RISK_FREE_RATE) -> float:
+    def calculate_sortino_ratio(
+        returns: pd.Series,
+        target_return: float = RISK_FREE_RATE,
+    ) -> float:
         """
         Sortino Ratio（只懲罰下行風險）
         更適合評估高股息ETF
@@ -527,15 +532,18 @@ class FinancialAnalyzer:
         excess_returns = returns - target_return / TRADING_DAYS
         downside_returns = excess_returns[excess_returns < 0]
         
+
         if len(downside_returns) == 0:
             return np.inf
         
-        
+
         downside_deviation = np.sqrt(np.mean(downside_returns**2)) * np.sqrt(TRADING_DAYS)
         
+
         if downside_deviation == 0:
             return np.inf
         
+
         return (returns.mean() * TRADING_DAYS - target_return) / downside_deviation
     
     @staticmethod
@@ -612,7 +620,6 @@ class FinancialAnalyzer:
         utility = total_return - risk_penalty + dividend_bonus - mismatch_penalty + fit_bonus
 
         return utility, risk_fit_score, float(mismatch_penalty)
-
 
 # ===============================
 # 主要計算流程
