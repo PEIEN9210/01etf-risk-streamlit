@@ -493,7 +493,6 @@ class FinancialAnalyzer:
         beta_pvalue = p_value
         
         # === Sharpe Ratio ===
-        @@ -496,251 +496,281 @@ class FinancialAnalyzer:
         sharpe = (ann_return - RISK_FREE_RATE) / ann_volatility if ann_volatility > 0 else 0
         
         # Sharpe Ratio的統計檢驗（Jobson & Korkie, 1981）
@@ -620,6 +619,7 @@ class FinancialAnalyzer:
         utility = total_return - risk_penalty + dividend_bonus - mismatch_penalty + fit_bonus
 
         return utility, risk_fit_score, float(mismatch_penalty)
+
 
 # ===============================
 # 主要計算流程
@@ -794,7 +794,7 @@ radar_data = df_top.copy()
 radar_metrics = ["年化報酬%", "Sharpe Ratio", "Information Ratio", "TTM殖利率%"]
 
 # 標準化到 [0, 1]
-@@ -763,85 +791,87 @@ for _, row in radar_data.iterrows():
+@@ -763,85 +793,87 @@ for _, row in radar_data.iterrows():
         theta=radar_metrics + [radar_metrics[0]],
         fill='toself',
         name=row["ETF"],
