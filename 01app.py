@@ -555,20 +555,12 @@ class FinancialAnalyzer:
     @staticmethod
     def calculate_utility_score(metrics: FinancialMetrics,
                                risk_profile: RiskProfile,
-                               dividend_yield: float) -> Tuple[float, float, float]:
+                               dividend_yield: float) -> float:
         """
         基於CRRA效用函數的個人化分數
         U(R) = E[R] - (γ/2) * Var(R) + dividend_preference * yield
         
         這是唯一有學術基礎的個人化評分方法
-        基於 CRRA + 風險貼合度的個人化分數。
-
-        回傳：
-        - utility: 個人化效用分數
-        - risk_fit_score: 風險貼合度（0~1，越高越貼合）
-        - mismatch_penalty: 風險錯配懲罰
-
-        U(R) = E[R] - (γ/2)Var(R) + dividend_bonus - mismatch_penalty + fit_bonus
         """
         # 期望報酬（含配息）
         total_return = metrics.ann_return + dividend_yield / 100
@@ -580,31 +572,10 @@ class FinancialAnalyzer:
         dividend_preference = 1 - risk_profile.theta  # 保守→1，積極→0
         dividend_bonus = dividend_preference * dividend_yield / 100 * 0.5
         
-        # 目標風險輪廓（隨 θ 調整）
-        target_beta = 0.45 + 1.10 * risk_profile.theta      # 0.45 ~ 1.55
-        target_vol = 0.10 + 0.22 * risk_profile.theta       # 10% ~ 32%
-
-        # 風險容忍範圍：積極投資人容忍更大偏離
-        beta_tolerance = 0.18 + 0.55 * risk_profile.theta   # 0.18 ~ 0.73
-        vol_tolerance = 0.035 + 0.18 * risk_profile.theta   # 3.5% ~ 21.5%
-
-        beta_z = (metrics.beta - target_beta) / beta_tolerance
-        vol_z = (metrics.ann_volatility - target_vol) / vol_tolerance
-
-        # 時間範圍越短，對風險錯配越敏感
-        horizon_sensitivity = float(np.clip(10 / max(risk_profile.time_horizon, 1), 0.7, 2.0))
-
-        mismatch_penalty = horizon_sensitivity * (0.12 * beta_z**2 + 0.10 * vol_z**2)
-
-        # 高斯型貼合度（0~1）
-        risk_fit_score = float(np.exp(-0.5 * (beta_z**2 + vol_z**2)))
-        fit_bonus = 0.03 * risk_fit_score
-
         # 效用分數
-        utility = total_return - risk_penalty + dividend_bonus - mismatch_penalty + fit_bonus
-
-        return utility, risk_fit_score, float(mismatch_penalty)
-
+        utility = total_return - risk_penalty + dividend_bonus
+        
+        return utility
 
 # ===============================
 # 主要計算流程
@@ -655,7 +626,7 @@ for etf_code, etf_type in ETF_LIST.items():
         info_ratio = analyzer.calculate_information_ratio(returns.loc[idx], market_returns.loc[idx])
         
         # 效用分數（唯一的個人化指標）
-        utility_score, risk_fit_score, mismatch_penalty = analyzer.calculate_utility_score(
+        utility_score = analyzer.calculate_utility_score(
             metrics, risk_profile, div_info.ttm_yield
         )
         
@@ -667,7 +638,7 @@ for etf_code, etf_type in ETF_LIST.items():
             "最新配息日": div_info.latest_date,
             "最近一次配息": div_info.latest_amount,
             "TTM配息": div_info.ttm_dividend,
-            "TTM殖���率%": div_info.ttm_yield,
+            "TTM殖利率%": div_info.ttm_yield,
             "配息來源": div_info.data_source,
             
             # 核心指標
@@ -689,8 +660,6 @@ for etf_code, etf_type in ETF_LIST.items():
             
             # 個人化分數（基於效用函數）
             "效用分數": round(utility_score, 4),
-            "風險貼合度": round(risk_fit_score, 3),
-            "風險錯配懲罰": round(mismatch_penalty, 4),
             
             # 統計顯著性
             "Sharpe顯著": "✓" if metrics.sharpe_pvalue < 0.05 else "✗",
