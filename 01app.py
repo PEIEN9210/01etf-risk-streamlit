@@ -531,7 +531,7 @@ class FinancialAnalyzer:
             return np.inf
         
         
-    downside_deviation = np.sqrt(np.mean(downside_returns**2)) * np.sqrt(TRADING_DAYS)
+        downside_deviation = np.sqrt(np.mean(downside_returns**2)) * np.sqrt(TRADING_DAYS)
         
         if downside_deviation == 0:
             return np.inf
