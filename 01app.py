@@ -530,7 +530,8 @@ class FinancialAnalyzer:
         if len(downside_returns) == 0:
             return np.inf
         
-        downside_deviation = np.sqrt(np.mean(downside_returns**2)) * np.sqrt(TRADING_DAYS)
+        
+    downside_deviation = np.sqrt(np.mean(downside_returns**2)) * np.sqrt(TRADING_DAYS)
         
         if downside_deviation == 0:
             return np.inf
@@ -556,26 +557,62 @@ class FinancialAnalyzer:
     def calculate_utility_score(metrics: FinancialMetrics,
                                risk_profile: RiskProfile,
                                dividend_yield: float) -> float:
+                               dividend_yield: float) -> Tuple[float, float, float]:
         """
         基於CRRA效用函數的個人化分數
         U(R) = E[R] - (γ/2) * Var(R) + dividend_preference * yield
         
         這是唯一有學術基礎的個人化評分方法
+        基於 CRRA + 風險貼合度的個人化分數。
+
+        回傳：
+        - utility: 個人化效用分數
+        - risk_fit_score: 風險貼合度（0~1，越高越貼合）
+        - mismatch_penalty: 風險錯配懲罰
+
+        U(R) = E[R] - (γ/2)Var(R) + dividend_bonus - mismatch_penalty + fit_bonus
         """
         # 期望報酬（含配息）
         total_return = metrics.ann_return + dividend_yield / 100
         
+
         # 風險懲罰（CRRA效用）
         risk_penalty = (risk_profile.risk_aversion / 2) * (metrics.ann_volatility ** 2)
         
+
         # 配息偏好（保守投資人更重視配息）
         dividend_preference = 1 - risk_profile.theta  # 保守→1，積極→0
         dividend_bonus = dividend_preference * dividend_yield / 100 * 0.5
         
+
+        # 目標風險輪廓（隨 θ 調整）
+        target_beta = 0.45 + 1.10 * risk_profile.theta      # 0.45 ~ 1.55
+        target_vol = 0.10 + 0.22 * risk_profile.theta       # 10% ~ 32%
+
+        # 風險容忍範圍：積極投資人容忍更大偏離
+        beta_tolerance = 0.18 + 0.55 * risk_profile.theta   # 0.18 ~ 0.73
+        vol_tolerance = 0.035 + 0.18 * risk_profile.theta   # 3.5% ~ 21.5%
+
+        beta_z = (metrics.beta - target_beta) / beta_tolerance
+        vol_z = (metrics.ann_volatility - target_vol) / vol_tolerance
+
+        # 時間範圍越短，對風險錯配越敏感
+        horizon_sensitivity = float(np.clip(10 / max(risk_profile.time_horizon, 1), 0.7, 2.0))
+
+        mismatch_penalty = horizon_sensitivity * (0.12 * beta_z**2 + 0.10 * vol_z**2)
+
+        # 高斯型貼合度（0~1）
+        risk_fit_score = float(np.exp(-0.5 * (beta_z**2 + vol_z**2)))
+        fit_bonus = 0.03 * risk_fit_score
+
         # 效用分數
         utility = total_return - risk_penalty + dividend_bonus
         
         return utility
+        utility = total_return - risk_penalty + dividend_bonus - mismatch_penalty + fit_bonus
+
+        return utility, risk_fit_score, float(mismatch_penalty)
+
 
 # ===============================
 # 主要計算流程
@@ -627,6 +664,7 @@ for etf_code, etf_type in ETF_LIST.items():
         
         # 效用分數（唯一的個人化指標）
         utility_score = analyzer.calculate_utility_score(
+        utility_score, risk_fit_score, mismatch_penalty = analyzer.calculate_utility_score(
             metrics, risk_profile, div_info.ttm_yield
         )
         
@@ -660,6 +698,8 @@ for etf_code, etf_type in ETF_LIST.items():
             
             # 個人化分數（基於效用函數）
             "效用分數": round(utility_score, 4),
+            "風險貼合度": round(risk_fit_score, 3),
+            "風險錯配懲罰": round(mismatch_penalty, 4),
             
             # 統計顯著性
             "Sharpe顯著": "✓" if metrics.sharpe_pvalue < 0.05 else "✗",
@@ -708,6 +748,7 @@ display_cols = [
     "ETF", "類型", "最新價", "TTM殖利率%",
     "年化報酬%", "年化波動%", "Sharpe Ratio", "Beta",
     "效用分數", "Sharpe顯著", "Beta顯著"
+    "效用分數", "風險貼合度", "Sharpe顯著", "Beta顯著"
 ]
 
 st.dataframe(
@@ -719,6 +760,8 @@ st.dataframe(
         "Sharpe Ratio": "{:.3f}",
         "Beta": "{:.3f}",
         "效用分數": "{:.4f}"
+        "效用分數": "{:.4f}",
+        "風險貼合度": "{:.3f}"
     }),
     use_container_width=True
 )
@@ -744,22 +787,7 @@ radar_data = df_top.copy()
 radar_metrics = ["年化報酬%", "Sharpe Ratio", "Information Ratio", "TTM殖利率%"]
 
 # 標準化到 [0, 1]
-for col in radar_metrics:
-    min_val = radar_data[col].min()
-    max_val = radar_data[col].max()
-    if max_val > min_val:
-        radar_data[f"{col}_norm"] = (radar_data[col] - min_val) / (max_val - min_val)
-    else:
-        radar_data[f"{col}_norm"] = 0.5
-
-fig_radar = go.Figure()
-
-for _, row in radar_data.iterrows():
-    values = [row[f"{m}_norm"] for m in radar_metrics]
-    values.append(values[0])  # 閉合
-    
-    fig_radar.add_trace(go.Scatterpolar(
-        r=values,
+@@ -763,85 +791,87 @@ for _, row in radar_data.iterrows():
         theta=radar_metrics + [radar_metrics[0]],
         fill='toself',
         name=row["ETF"],
@@ -786,6 +814,7 @@ scatter = alt.Chart(df_top).mark_circle(size=200, opacity=0.7).encode(
     tooltip=[
         "ETF", "類型", "年化報酬%", "年化波動%",
         "Sharpe Ratio", "Beta", "效用分數", "TTM殖利率%"
+        "Sharpe Ratio", "Beta", "效用分數", "風險貼合度", "風險錯配懲罰", "TTM殖利率%"
     ]
 )
 
@@ -803,6 +832,7 @@ full_display_cols = [
     "年化波動%", "波動標準誤%", "Sharpe Ratio", "Sharpe p-value",
     "Beta", "Beta標準誤", "Beta p-value", "Alpha (年化%)",
     "Sortino Ratio", "Information Ratio", "效用分數"
+    "Sortino Ratio", "Information Ratio", "效用分數", "風險貼合度", "風險錯配懲罰"
 ]
 
 st.dataframe(
@@ -820,12 +850,16 @@ st.dataframe(
         "Sortino Ratio": "{:.3f}",
         "Information Ratio": "{:.3f}",
         "效用分數": "{:.4f}"
+        "效用分數": "{:.4f}",
+        "風險貼合度": "{:.3f}",
+        "風險錯配懲罰": "{:.4f}"
     }).applymap(
         lambda x: "background-color: #d4edda" if isinstance(x, float) and x < 0.05 else "",
         subset=["Sharpe p-value", "Beta p-value"]
     ),
     use_container_width=True
 )
+
 
 # ===============================
 # 方法論說明
