@@ -311,7 +311,7 @@ st.sidebar.header("📈 Top N ETF")
 TOP_N = st.sidebar.slider("顯示數量", 1, len(ETF_LIST), 5)
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🔄 清除快取"):
+if st.sidebar.button("🔄 取得結果 (清除快取)"):
     st.cache_data.clear()
     st.sidebar.success("✅ 快取已清除")
 
