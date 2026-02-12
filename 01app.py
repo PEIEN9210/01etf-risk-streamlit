@@ -864,8 +864,35 @@ full_cols = [
     "Beta", "最大回撤%", "TTM殖利率%", "效用分數", "CER%", "風險調整報酬"
 ]
 
+# 計算效用分數的分位數以進行條件格式化
+df_display = df_results[full_cols].sort_values("效用分數", ascending=False)
+
+def highlight_utility(row):
+    """根據效用分數高亮顯示"""
+    utility = row["效用分數"]
+    max_utility = df_display["效用分數"].max()
+    min_utility = df_display["效用分數"].min()
+    
+    # 標準化到 [0, 1]
+    if max_utility > min_utility:
+        norm_utility = (utility - min_utility) / (max_utility - min_utility)
+    else:
+        norm_utility = 0.5
+    
+    # 根據效用分數決定背景色
+    if norm_utility >= 0.75:
+        color = 'background-color: #d4edda'  # 綠色（高效用）
+    elif norm_utility >= 0.5:
+        color = 'background-color: #fff3cd'  # 黃色（中效用）
+    elif norm_utility >= 0.25:
+        color = 'background-color: #f8d7da'  # 淺紅（低效用）
+    else:
+        color = 'background-color: #f5c6cb'  # 紅色（極低效用）
+    
+    return [color if col == "效用分數" else '' for col in row.index]
+
 st.dataframe(
-    df_results[full_cols].sort_values("效用分數", ascending=False).style.format({
+    df_display.style.format({
         "年化報酬%": "{:.2f}%",
         "年化波動%": "{:.2f}%",
         "Sharpe Ratio": "{:.3f}",
@@ -876,7 +903,7 @@ st.dataframe(
         "效用分數": "{:.4f}",
         "CER%": "{:.2f}%",
         "風險調整報酬": "{:.4f}"
-    }).background_gradient(subset=["效用分數"], cmap="RdYlGn"),
+    }).apply(highlight_utility, axis=1),
     use_container_width=True
 )
 
