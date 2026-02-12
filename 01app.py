@@ -134,13 +134,13 @@ horizon_years, horizon_score, discount_factor = horizon_mapping[horizon_choice]
 
 # Q2: Risk Capacity
 st.sidebar.markdown("---")
-st.sidebar.subheader("Q2. 風險承受能力")
+st.sidebar.subheader("Q2. 如果您有一筆閒置資金，您會選擇？")
 risk_capacity_mapping = {
-    "存入銀行或購買政府公債": 0.0,
-    "購買債券型基金": 0.25,
-    "購買混合型基金": 0.50,
-    "購買股票型基金": 0.75,
-    "購買個股或高風險商品": 1.0
+    "存入銀行或購買政府公債（幾乎無風險）": 0.0,
+    "購買債券型基金（低風險，報酬穩定）": 0.25,
+    "購買混合型基金（中等風險與報酬）": 0.50,
+    "購買股票型基金（高風險，追求高報酬）": 0.75,
+    "購買個股或高風險商品（承受重大虧損風險）": 1.0
 }
 risk_capacity = st.sidebar.radio(
     "投資偏好",
