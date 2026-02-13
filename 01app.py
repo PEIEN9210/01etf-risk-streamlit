@@ -100,8 +100,8 @@ NEWEY_WEST_LAGS = 4  # Newey-West HAC標準誤滯後期
 # 批判：原版未考慮存活者偏差
 # 改進：標註上市日期，動態構建universe
 ETF_UNIVERSE = {
-    "0050.TW": {"name": "元大台灣50", "inception": "2003-06-25", "category": "Large Cap"},
-    "006208.TW": {"name": "富邦台50", "inception": "2012-08-23", "category": "Large Cap"},
+    "0050.TW": {"name": "大型股", "inception": "2003-06-25", "category": "Large Cap"},
+    "006208.TW": {"name": "大型股", "inception": "2012-08-23", "category": "Large Cap"},
     "00692.TW": {"name": "富邦公司治理", "inception": "2017-05-17", "category": "ESG"},
     "00757.TW": {"name": "統一FANG+", "inception": "2018-08-13", "category": "Tech"},
     "0056.TW": {"name": "元大高股息", "inception": "2007-12-13", "category": "High Dividend"},
