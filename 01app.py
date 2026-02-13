@@ -354,14 +354,17 @@ age_score = max(0, min(1, (80 - age) / 60))
 # 新增：背景風險評估
 st.sidebar.markdown("---")
 st.sidebar.subheader("🏠 背景風險評估（進階）")
-with st.sidebar.expander("點擊展開背景風險評估"):
-    st.markdown("**人力資本評估**")
-    annual_income = st.number_input("年收入（萬元）", 0, 1000, 100, 10)
-    working_years_remaining = st.number_input("預計工作年數", 0, 50, 30, 1)
-    income_growth_rate = st.slider("預期年薪成長率", 0.0, 10.0, 3.0, 0.5) / 100
+
+enable_background_risk = st.sidebar.checkbox("啟用背景風險評估", value=False)
+
+if enable_background_risk:
+    st.sidebar.markdown("**人力資本評估**")
+    annual_income = st.sidebar.number_input("年收入（萬元）", 0, 1000, 100, 10)
+    working_years_remaining = st.sidebar.number_input("預計工作年數", 0, 50, 30, 1)
+    income_growth_rate = st.sidebar.slider("預期年薪成長率", 0.0, 10.0, 3.0, 0.5) / 100
     
-    st.markdown("**職業股市相關性**")
-    job_sector = st.selectbox(
+    st.sidebar.markdown("**職業股市相關性**")
+    job_sector = st.sidebar.selectbox(
         "職業類別",
         ["公務員/教師", "傳統製造業", "金融業", "科技業", "自營商"]
     )
@@ -375,8 +378,8 @@ with st.sidebar.expander("點擊展開背景風險評估"):
     }
     hc_corr = sector_correlation[job_sector]
     
-    st.markdown("**不動產**")
-    real_estate = st.number_input("房地產價值（萬元）", 0, 10000, 0, 100)
+    st.sidebar.markdown("**不動產**")
+    real_estate = st.sidebar.number_input("房地產價值（萬元）", 0, 10000, 0, 100)
     
     # 計算人力資本現值（簡化DCF）
     discount_rate = 0.04  # 實質折現率
@@ -392,9 +395,9 @@ with st.sidebar.expander("點擊展開背景風險評估"):
         real_estate_liquidity_discount=0.15
     )
     
-    st.metric("人力資本現值", f"${hc_pv/10000:.0f}萬")
-    st.metric("股市相關性", f"{hc_corr:.1%}")
-    st.metric("有效風險容忍度", f"{background_risk.effective_risk_capacity():.0%}")
+    st.sidebar.metric("人力資本現值", f"${hc_pv/10000:.0f}萬")
+    st.sidebar.metric("股市相關性", f"{hc_corr:.1%}")
+    st.sidebar.metric("有效風險容忍度", f"{background_risk.effective_risk_capacity():.0%}")
 else:
     background_risk = None
 
