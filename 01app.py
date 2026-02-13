@@ -10,7 +10,7 @@ Original file is located at
 
 # -*- coding: utf-8 -*-
 """
-台灣 ETF 個人化推薦系統 - 學術標準重構版
+台灣 ETF 個人化推薦系統 - 哈佛/渥頓學術標準重構版
 ===========================================================
 
 批判性重構依據：
@@ -61,7 +61,6 @@ import logging
 from statsmodels.stats.multitest import multipletests
 from statsmodels.regression.linear_model import OLS
 from statsmodels.tools.tools import add_constant
-from arch import arch_model
 import itertools
 
 warnings.filterwarnings('ignore')
